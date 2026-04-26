@@ -24,18 +24,30 @@ from strategies.pattern_detection import detect_patterns
 
 def compute_tmm_squeeze(df: pd.DataFrame, squeeze_window: int = 20) -> pd.DataFrame:
     """
-    Placeholder for TTM Squeeze Pro (S) computation.
+    TTM Squeeze Pro (S) computation using pandas-ta's squeeze_pro.
 
-    Real implementation would:
-    - Compute Bollinger Bands (BB): middle=SMA(20), ±2*std
-    - Compute Keltner Channels (KC): middle=SMA(20), ±2*ATR(20)
-    - Squeeze condition: BB upper/lower inside KC upper/lower (contraction)
-    - Fire when Bollinger Bands exit Keltner Channels (momentum impulse)
+    The squeeze_pro indicator adds columns:
+      SQZPRO_ON_WIDE, SQZPRO_ON_NORMAL, SQZPRO_ON_NARROW  — squeeze intensity (0/1)
+      SQZPRO_OFF_WIDE                                      — squeeze fired (0/1)
+      SQZPRO_NO                                            — no squeeze
 
-    For now, returns a boolean column that is False until implemented.
+    We derive a unified boolean `ttm_squeeze` = True when ANY squeeze is ON
+    (NARROW, NORMAL, or WIDE).
     """
-    # Placeholder: all False until real TTM Squeeze logic is added
-    df['ttm_squeeze'] = False
+    # pandas-ta adds the squeeze_pro columns in-place
+    df.ta.squeeze_pro(append=True)
+
+    # Unified squeeze flag: True if any squeeze channel is active
+    squeeze_on = (
+        (df.get('SQZPRO_ON_NARROW', 0) == 1) |
+        (df.get('SQZPRO_ON_NORMAL', 0) == 1) |
+        (df.get('SQZPRO_ON_WIDE', 0) == 1)
+    )
+    df['ttm_squeeze'] = squeeze_on
+
+    # Optional: track fired events separately
+    df['ttm_squeeze_fired'] = df.get('SQZPRO_OFF_WIDE', 0) == 1
+
     return df
 
 
@@ -123,7 +135,9 @@ def main():
     # Display latest rows
     cols = [
         'close', 'EMA_8', 'EMA_21', 'EMA_55', 'Upward_Trend',
-        'bull_flag', 'bull_pennant', 'ttm_squeeze', 'tps_score'
+        'bull_flag', 'bull_pennant',
+        'SQZPRO_ON_NARROW', 'SQZPRO_ON_NORMAL', 'SQZPRO_ON_WIDE',
+        'ttm_squeeze', 'ttm_squeeze_fired', 'tps_score'
     ]
 
     print(f"=== Latest {args.show} rows ===")
@@ -136,8 +150,8 @@ def main():
     print(f"Upward Trend days : {df['Upward_Trend'].sum():>5}  ({df['Upward_Trend'].mean()*100:>5.1f}%)")
     print(f"Bull Flag signals  : {df['bull_flag'].sum():>5}  ({df['bull_flag'].mean()*100:>5.1f}%)")
     print(f"Bull Pennant sigs  : {df['bull_pennant'].sum():>5}  ({df['bull_pennant'].mean()*100:>5.1f}%)")
-    # Squeeze not yet implemented
-    print(f"TTM Squeeze sigs   : {'N/A':>5}  (not yet implemented)")
+    print(f"TTM Squeeze ON     : {df['ttm_squeeze'].sum():>5}  ({df['ttm_squeeze'].mean()*100:>5.1f}%)")
+    print(f"TTM Squeeze FIRED  : {df['ttm_squeeze_fired'].sum():>5}  ({df['ttm_squeeze_fired'].mean()*100:>5.1f}%)")
 
     # Combined signal
     tps_count = df['tps_all'].sum()
@@ -145,11 +159,12 @@ def main():
 
     current = df.iloc[-1]
     print(f"\nCurrent state (latest bar):")
-    print(f"  Upward_Trend  : {current['Upward_Trend']}")
-    print(f"  Bull Flag     : {current['bull_flag']}")
-    print(f"  Bull Pennant  : {current['bull_pennant']}")
-    print(f"  TTM Squeeze   : {current['ttm_squeeze']}  ← stub")
-    print(f"  TPS Score     : {int(current['tps_score'])} / 4")
+    print(f"  Upward_Trend    : {current['Upward_Trend']}")
+    print(f"  Bull Flag       : {current['bull_flag']}")
+    print(f"  Bull Pennant    : {current['bull_pennant']}")
+    print(f"  TTM Squeeze ON  : {current['ttm_squeeze']}")
+    print(f"  TTM Squeeze OFF : {current['ttm_squeeze_fired']}  ← momentum impulse")
+    print(f"  TPS Score       : {int(current['tps_score'])} / 4")
 
     if args.save:
         outfile = f'output/tps_scan_{args.symbol}_{datetime.now():%Y%m%d_%H%M%S}.csv'
