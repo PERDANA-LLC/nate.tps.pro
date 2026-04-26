@@ -1,0 +1,1 @@
+"""Options Detective package."""

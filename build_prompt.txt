@@ -1,0 +1,106 @@
+Build "Options Detective" - an automated options trading scanner MVP.
+
+PROJECT: /tmp/options_detective
+BACKEND: FastAPI + Python 3.12
+FRONTEND: Simple HTML/JS dashboard with Bootstrap
+DATABASE: SQLite for MVP (upgrade to PostgreSQL later)
+API: Charles Schwab Developer API (use sandbox mode)
+
+CORE FEATURES TO IMPLEMENT:
+
+1. Schwab API Integration Module (schwab_api.py):
+   - Authentication using OAuth (use placeholder credentials)
+   - Get option chains for symbols (SPY, QQQ, IWM)
+   - Get quotes for underlyings
+   - Place paper trades (no real execution)
+   - Error handling + retry logic
+
+2. Options Strategy Engine (strategies.py):
+   Implement 3 strategies:
+   
+   a) Iron Condor Scanner:
+      - Short strike: 16-30 delta calls AND puts
+      - Long strike: 5-10 strikes beyond short
+      - Filter: IV Rank > 50%, liquidity > 100 volume
+      - Score: Probability of Profit * (max profit / max loss)
+   
+   b) Covered Call Finder:
+      - Stock price > $10, volume > 1M
+      - Expiration 30-45 DTE
+      - Strike: 10-15% OTM
+      - Annualized yield > 8%
+   
+   c) Cash-Secured Put Screener:
+      - Strike: 20-30% OTM
+      - Probability > 70%
+      - Premium > $0.50
+      - Avoid earnings dates within 7 days
+
+3. Greeks Calculator (greeks.py):
+   - Use Black-Scholes (mibian library or custom)
+   - Calculate: Delta, Gamma, Theta, Vega, Rho
+   - Probability of Profit (POP) from delta approximation
+
+4. Backtesting Module (backtest.py):
+   - Load historical options data (simulate with mock data)
+   - Calculate win rate, max drawdown, Sharpe ratio
+   - Compare strategies over 1 year
+
+5. FastAPI Application (main.py + api/):
+   Endpoints:
+   - GET /health
+   - POST /scan {symbol, strategy, dte_min, dte_max}
+   - GET /strategies?symbol=SPY (returns top 10)
+   - GET /positions (paper trades)
+   - POST /paper-trade (open position)
+   - DELETE /paper-trade/{id} (close)
+   - GET /account (virtual balance + P&L)
+   
+6. Web Dashboard (static/index.html + app.js):
+   - Show top 5 daily setups in a table
+   - Columns: Symbol, Strategy, POP, Max Profit, Max Loss, Expiration
+   - Color coding: Green >70% POP, Yellow 50-70%, Red <50%
+   - Refresh button to re-scan
+   - Mobile responsive
+
+7. Configuration (config.py):
+   - schwab_client_id, schwab_client_secret (placeholder)
+   - paper_trading_mode = True
+   - max_position_size = 0.05 (5% portfolio)
+   - risk_free_rate = 0.05
+   
+8. Database Models (models.py):
+   - StrategyScan (date, symbol, strategy, strike details, score)
+   - PaperPosition (open/close, P&L)
+   - UserSettings (risk params)
+   Use SQLAlchemy ORM
+
+9. Scheduler (scheduler.py):
+   - Run scan every 5 min during market hours (9:30am-4pm ET)
+   - Use Celery or simple APScheduler for MVP
+   - Store results in database
+
+10. Discord Webhook (discord.py):
+    - Format trade alerts as embeds
+    - Send to webhook URL (configurable)
+    - Include: Symbol, Strikes, Credit/Debit, POP, URL to dashboard
+
+FILES TO CREATE:
+- requirements.txt
+- .env.example
+- Dockerfile
+- docker-compose.yml (with PostgreSQL for prod)
+- README.md (setup + deploy instructions)
+- .gitignore
+
+IMPORTANT INSTRUCTIONS:
+- Write clean, production-grade Python with type hints
+- Use async/await for FastAPI
+- Include comprehensive error handling
+- Log all API calls and errors
+- Add docstrings for all functions
+- Create unit tests for scoring logic (tests/ directory)
+- Use environment variables for secrets
+- Follow PEP 8 style
+
+DELIVERABLE: Complete codebase ready to run with 'docker-compose up'

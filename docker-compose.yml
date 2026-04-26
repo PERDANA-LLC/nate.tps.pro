@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: optionsdetective
+      POSTGRES_PASSWORD: optionspass
+      POSTGRES_DB: optionsdetective
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U optionsdetective"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://optionsdetective:optionspass@postgres/optionsdetective
+      SCHWAB_CLIENT_ID: ${SCHWAB_CLIENT_ID}
+      SCHWAB_CLIENT_SECRET: ${SCHWAB_CLIENT_SECRET}
+      SCHWAB_AUTH_MODE: ${SCHWAB_AUTH_MODE:-sandbox}
+      PAPER_TRADING_MODE: ${PAPER_TRADING_MODE:-true}
+      INITIAL_BALANCE: ${INITIAL_BALANCE:-10000}
+      MAX_POSITION_SIZE: ${MAX_POSITION_SIZE:-0.05}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-in-production}
+      DEBUG: ${DEBUG:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Optional: Redis for Celery (future async tasks)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
