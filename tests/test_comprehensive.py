@@ -237,10 +237,10 @@ class TestGreeks:
         """Test deep OTM put delta approaches 0 (negative but small magnitude)."""
         result = calculate_greeks(
             spot_price=100,
-            strike_price=150,
-            days_to_expiry=30,
-            risk_free_rate=0.05,
-            option_type='put',
+            strike_price=50,
+        days_to_expiry=30,
+        risk_free_rate=0.05,
+        option_type='put',
             implied_volatility=0.25
         )
         
@@ -525,7 +525,7 @@ class TestPaperTrader:
         assert summary['winning_trades'] == 3
         assert summary['losing_trades'] == 2
         assert summary['win_rate'] == 60.0
-        assert summary['total_pnl'] == 250.0  # 3*100 - 2*50
+        assert summary['total_pnl'] == 200.0  # 3*100 - 2*50
         assert summary['open_positions'] == 1
 
 

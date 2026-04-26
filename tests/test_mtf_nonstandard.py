@@ -24,7 +24,7 @@ def create_test_df_minutes(num_bars: int = 100) -> pd.DataFrame:
     """Create synthetic 1-minute OHLCV data for testing."""
     dates = pd.date_range('2025-01-01 09:30', periods=num_bars, freq='1min')
     np.random.seed(42)
-    close = 100 + np.cumsum(np.random.randn(num_bars) * 0.1)
+    close = pd.Series(100 + np.cumsum(np.random.randn(num_bars) * 0.1), index=dates)
     high = close + np.random.rand(num_bars) * 0.5
     low = close - np.random.rand(num_bars) * 0.5
     volume = np.random.randint(100, 1000, size=num_bars)
@@ -133,7 +133,15 @@ def test_mixed_timeframes():
     Test that W, D, standard intraday (60), and non-standard (195) can coexist.
     """
     daily_dates = pd.date_range('2025-01-01', periods=10, freq='D')
-    df_daily = pd.DataFrame({'close': range(100, 110)}, index=daily_dates)
+    close = pd.Series(range(100, 110), index=daily_dates)
+    # Build full OHLCV: open = close.shift(1), high = close+0.5, low = close-0.5, volume constant
+    df_daily = pd.DataFrame({
+        'open': close.shift(1).fillna(close.iloc[0]),
+        'high': close + 0.5,
+        'low': close - 0.5,
+        'close': close,
+        'volume': 1000
+    }, index=daily_dates)
     # Pre-populate daily TTM squeeze columns so 'D' works
     df_daily['ttm_squeeze'] = False
     df_daily['ttm_squeeze_fired'] = False

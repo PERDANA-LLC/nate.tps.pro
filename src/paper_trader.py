@@ -3,6 +3,7 @@ Automated Paper Trading Engine
 Simulates real trading with realistic P&L tracking and risk management.
 """
 import asyncio
+import numpy as np
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field

@@ -5,6 +5,7 @@ Tests strategies against historical data and calculates performance metrics.
 import pandas as pd
 import numpy as np
 import math
+from scipy.stats import norm
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ import json
 import logging
 
 from .greeks import calculate_greeks, probability_of_profit
+from .strategies import serialize_legs
 from .models import StrategyScan, PaperPosition, Base
 
 logger = logging.getLogger(__name__)
@@ -195,7 +197,7 @@ class Backtester:
         step = 5 if spot_price > 100 else 2.5
         
         # Generate strikes from -$40 to +$40
-        for i in range(-16, 17):
+        for i in range(-30, 31):
             strikes.append(round(spot_price + i * step, 2))
         
         calls = []
@@ -227,8 +229,8 @@ class Backtester:
             
             from math import exp, sqrt, pi, log
             
-            nd1 = (1 + np.erf(d1 / 1.414213562)) / 2
-            nd2 = (1 + np.erf(d2 / 1.414213562)) / 2
+            nd1 = norm.cdf(d1)
+            nd2 = norm.cdf(d2)
             
             call_price = spot_price * nd1 - strike * exp(-0.05 * time_frac) * nd2
             put_price = strike * exp(-0.05 * time_frac) - spot_price * (1 - nd1)
@@ -322,7 +324,8 @@ class Backtester:
                 days_held = (current_date - current_position.entry_date).days
                 
                 # Exit conditions
-                should_exit = False                exit_reason = ""
+                should_exit = False
+                exit_reason = ""
                 
                 # 1. Max holding period reached
                 if days_held >= holding_period:
@@ -381,7 +384,7 @@ class Backtester:
                         exit_price=None,
                         quantity=1,
                         pnl=0.0,
-                        legs=[serialize_legs(l)[0] for l in best.legs],
+                        legs=serialize_legs(best.legs),
                         status="open"
                     )
                     current_position = trade
@@ -413,7 +416,8 @@ class Backtester:
             trades=trades,
             initial_balance=initial_balance or self.initial_balance,
             equity_curve=equity_curve,
-            benchmark_data=historical_data
+            benchmark_data=historical_data,
+            strategy_name=strategy.__class__.__name__
         )
         
         logger.info(f"Backtest complete: {result.total_trades} trades, "
@@ -443,7 +447,8 @@ class Backtester:
         trades: List[Trade],
         initial_balance: float,
         equity_curve: List[float],
-        benchmark_data: pd.DataFrame
+        benchmark_data: pd.DataFrame,
+        strategy_name: str = "Unknown"
     ) -> BacktestResult:
         """Calculate performance metrics from trade list."""
         if not trades:
@@ -517,7 +522,7 @@ class Backtester:
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
         
         # Benchmark comparison (SPY buy-and-hold)
-        if len(benchmark_data) > 1:
+        if benchmark_data is not None and len(benchmark_data) > 1:
             start_price = benchmark_data['Close'].iloc[0]
             end_price = benchmark_data['Close'].iloc[-1]
             benchmark_return = (end_price - start_price) / start_price * 100
@@ -532,7 +537,7 @@ class Backtester:
             beta = 0.0
         
         return BacktestResult(
-            strategy_name=strategy.__class__.__name__,
+            strategy_name=strategy_name,
             total_trades=len(trades),
             winning_trades=len(winning),
             losing_trades=len(losing),

@@ -1,12 +1,17 @@
-"""
-Options trading strategy scoring and filtering logic.
-"""
+"""Options trading strategy scoring and filtering logic."""
+
+import sys
+import os
+import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import logging
 
-from .greeks import calculate_greeks, probability_of_profit, calculate_iv_rank
+# Add project root to path for absolute imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from src.greeks import calculate_greeks, probability_of_profit, calculate_iv_rank
 
 logger = logging.getLogger(__name__)
 
