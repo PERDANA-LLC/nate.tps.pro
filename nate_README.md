@@ -67,6 +67,15 @@ Runs the full TPS stack in a single pass and outputs a consolidated signal table
 python strategies/tps_scanner.py --symbol SPY --window 10 --r2 0.8 --show 15 --save
 ```
 
+**Optional short interest filters** (additive constraints on latest bar):
+```bash
+# Require >20% short float AND >3.0 days to cover
+python strategies/tps_scanner.py --symbol SPY --min-short-float 20 --min-short-ratio 3
+
+# Filter by short float only
+python strategies/tps_scanner.py --symbol TSLA --min-short-float 15
+```
+
 **Output columns (OHLCV + all signals):**
 | Category | Columns |
 |---|---|
@@ -76,6 +85,7 @@ python strategies/tps_scanner.py --symbol SPY --window 10 --r2 0.8 --show 15 --s
 | Squeeze raw | `SQZPRO_ON_NARROW`, `SQZPRO_ON_NORMAL`, `SQZPRO_ON_WIDE`, `SQZPRO_OFF_WIDE` |
 | Squeeze derived | `ttm_squeeze` (any ON), `ttm_squeeze_fired` (breakout) |
 | Short interest | `short_float_pct`, `short_ratio`, `short_data_source`, `short_as_of_date` |
+| Filter overlay | `short_filter_met` — True when short thresholds pass (if any filters enabled) |
 | Composite | `tps_all` (T & (P) & S), `tps_score` (technical sum 0–4) |
 
 **Console summary:**
@@ -85,6 +95,8 @@ python strategies/tps_scanner.py --symbol SPY --window 10 --r2 0.8 --show 15 --s
 - TPS Score (0–4) and Full TPS alignment count
 
 **Note:** `tps_all` requires `Upward_Trend` AND (`bull_flag` OR `bull_pennant`) AND `ttm_squeeze` (squeeze active). Short metrics are informational/fundamental filters that can be layered on top for trade selection (e.g., high short_float_pct + squeeze firing = stronger breakout potential).
+
+**CLI short filters:** Use `--min-short-float` and/or `--min-short-ratio` to restrict output to symbols meeting those thresholds. The scanner adds a `short_filter_met` column (PASS/FAIL) and prints the filter status in the summary. This does not affect `tps_all`; it's an external overlay for watchlist generation.
 
 ---
 
