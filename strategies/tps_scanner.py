@@ -110,6 +110,10 @@ def main():
                         help='Pattern detection window (default: 10)')
     parser.add_argument('--r2', type=float, default=0.8,
                         help='Pattern R² threshold (default: 0.8)')
+    parser.add_argument('--min-short-float', type=float, default=None,
+                        help='Minimum Short Float %% to flag (e.g. 20.0). Default: no filter')
+    parser.add_argument('--min-short-ratio', type=float, default=None,
+                        help='Minimum Short Ratio (days to cover) to flag (e.g. 3.0). Default: no filter')
     parser.add_argument('--show', type=int, default=15,
                         help='Number of latest rows to display (default: 15)')
     parser.add_argument('--save', action='store_true',
@@ -137,6 +141,21 @@ def main():
         r2_threshold=args.r2
     )
 
+    # Get latest row once (for summary & current-state)
+    current = df.iloc[-1]
+
+    # -------------------------------------------------
+    # Short Interest Filters (optional)
+    # -------------------------------------------------
+    short_filter_met = True
+    if args.min_short_float is not None:
+        short_filter_met &= current['short_float_pct'] >= args.min_short_float
+    if args.min_short_ratio is not None:
+        short_filter_met &= current['short_ratio'] >= args.min_short_ratio
+
+    # Annotate DataFrame with short-filter flag (useful for saved CSV)
+    df['short_filter_met'] = (df['short_float_pct'] >= (args.min_short_float or 0)) &                              (df['short_ratio'] >= (args.min_short_ratio or 0))
+
     # Display latest rows
     cols = [
         'close', 'EMA_8', 'EMA_21', 'EMA_55', 'Upward_Trend',
@@ -144,6 +163,7 @@ def main():
         'SQZPRO_ON_NARROW', 'SQZPRO_ON_NORMAL', 'SQZPRO_ON_WIDE',
         'ttm_squeeze', 'ttm_squeeze_fired',
         'short_float_pct', 'short_ratio', 'short_data_source',
+        'short_filter_met',
         'tps_score'
     ]
 
@@ -162,12 +182,14 @@ def main():
     print(f"Short Float %      : {current['short_float_pct']:>5.1f}%  (as of {current['short_as_of_date']})")
     print(f"Short Ratio        : {current['short_ratio']:>5.2f} days")
     print(f"Short Data Source  : {current['short_data_source']}")
+    if args.min_short_float is not None or args.min_short_ratio is not None:
+        filter_status = "PASS" if short_filter_met else "FAIL"
+        print(f"Short Filter       : {filter_status}  (float ≥ {args.min_short_float or 'any'}, ratio ≥ {args.min_short_ratio or 'any'})")
 
     # Combined signal
     tps_count = df['tps_all'].sum()
     print(f"Full TPS alignment : {tps_count:>5}  ({tps_count/total*100 if total else 0:>5.1f}%)")
 
-    current = df.iloc[-1]
     print(f"\nCurrent state (latest bar):")
     print(f"  Upward_Trend    : {current['Upward_Trend']}")
     print(f"  Bull Flag       : {current['bull_flag']}")
@@ -176,6 +198,8 @@ def main():
     print(f"  TTM Squeeze OFF : {current['ttm_squeeze_fired']}  ← momentum impulse")
     print(f"  Short Float %   : {current['short_float_pct']}%")
     print(f"  Short Ratio     : {current['short_ratio']} days to cover")
+    if args.min_short_float is not None or args.min_short_ratio is not None:
+        print(f"  Short Filter    : {'✓ PASS' if short_filter_met else '✗ FAIL'}")
     print(f"  TPS Score       : {int(current['tps_score'])} / 4")
 
     if args.save:
