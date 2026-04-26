@@ -56,6 +56,30 @@ Output columns added:
 
 Parameters: `window=10` (default), `r2_threshold=0.8` (tunable in script).
 
+---
+
+### Unified TPS Scanner (T + P + S)
+
+Runs the full TPS stack in a single pass and outputs a consolidated signal table.
+
+```bash
+python strategies/tps_scanner.py --symbol SPY --window 10 --r2 0.8 --show 15 --save
+```
+
+**Output columns (in addition to OHLCV + EMAs):**
+- `res_slope`, `sup_slope`, `res_r2`, `sup_r2` — pattern regression metrics
+- `bull_flag`, `bull_pennant` — pattern flags
+- `ttm_squeeze` — TTM Squeeze Pro (stub; returns `False` until implemented)
+- `tps_all` — True when ALL of T, P, S are True (currently `False` since S is stub)
+- `tps_score` — sum of individual signal flags (0–4)
+
+**Summary printed to console:**
+- Trend days %, Flag/Pennant hit rates
+- Current bar state and TPS Score
+- Optional CSV export via `--save`
+
+**Note:** The Squeeze (S) column is currently a stub. Implementing true TTM Squeeze Pro logic is next.
+
 ## Project Structure
 
 ```
