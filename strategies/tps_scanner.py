@@ -17,11 +17,13 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+from typing import List
 
 # Local imports (same repo)
 from strategies.ema_trend_analysis import fetch_price_history, calculate_emas, detect_upward_trend
 from strategies.pattern_detection import detect_patterns
 from strategies.short_interest import enrich_with_short_metrics
+from strategies.mtf_squeeze import add_mtf_squeeze_columns
 import numpy as np
 
 
@@ -116,7 +118,8 @@ def detect_volume_burst(df: pd.DataFrame,
 
 def run_tps_scanner(symbol: str, client, ema_lengths: tuple = (8, 21, 55),
                      pattern_window: int = 10, r2_threshold: float = 0.8,
-                     vwap_window: int = 20, volume_multiplier: float = 2.0) -> pd.DataFrame:
+                     vwap_window: int = 20, volume_multiplier: float = 2.0,
+                     mtf_timeframes: List[str] = None) -> pd.DataFrame:
     """
     Full TPS scan on a single symbol.
 
@@ -128,10 +131,33 @@ def run_tps_scanner(symbol: str, client, ema_lengths: tuple = (8, 21, 55),
     5. Enrich with short interest (Short Float %, Short Ratio)
     6. Compute VWAP (rolling) and slope → vwap, vwap_rising
     7. Detect Volume Bursts → volume_burst, volume_ratio
+    8. (Optional) Multi-timeframe Squeeze — compute squeeze on W, D, and intraday
+       timeframes (195,130,78,60,30,15,10,5 min) → sqz_<tf>, sqz_<tf>_fired,
+       mtf_squeeze_count/any/all
+
+    Parameters
+    ----------
+    symbol : str
+        Ticker symbol (e.g., 'SPY').
+    client : schwabdev.Client
+        Authenticated Schwab API client.
+    ema_lengths : tuple, default (8,21,55)
+        EMA periods.
+    pattern_window : int, default 10
+        Lookback window for pattern detection.
+    r2_threshold : float, default 0.8
+        Minimum R^2 for pattern regression.
+    vwap_window : int, default 20
+        Rolling window for VWAP calculation.
+    volume_multiplier : float, default 2.0
+        Volume burst threshold as multiple of average volume.
+    mtf_timeframes : List[str] or None, default None
+        List of timeframes for multi-timeframe squeeze. E.g. ['W','D','60','30','15','5'].
 
     Returns
     -------
-    pd.DataFrame with all TPS signal columns, indexed by datetime.
+    pd.DataFrame
+        DataFrame indexed by datetime with all signal columns.
     """
     # ---- T: TREND ----
     df = fetch_price_history(symbol, client)
@@ -146,6 +172,10 @@ def run_tps_scanner(symbol: str, client, ema_lengths: tuple = (8, 21, 55),
 
     # ---- FUNDAMENTAL: Short Interest ----
     df = enrich_with_short_metrics(df, symbol)
+
+    # ---- MULTI-TIMEFRAME SQUEEZE ----
+    if mtf_timeframes:
+        add_mtf_squeeze_columns(df, symbol, client, mtf_timeframes)
 
     # ---- V: VWAP ----
     df = calculate_vwap(df, window=vwap_window)
@@ -210,6 +240,8 @@ def main():
                         help='VWAP lookback window (default: 20)')
     parser.add_argument('--volume-multiplier', type=float, default=2.0,
                         help='Volume burst threshold as multiple of average (default: 2.0)')
+    parser.add_argument('--mtf', default='W,D,195,130,78,60,30,15,10,5',
+                        help='Comma-separated list of timeframes for multi-timeframe squeeze (default: W,D,195,130,78,60,30,15,10,5)')
     parser.add_argument('--min-short-float', type=float, default=None,
                         help='Minimum Short Float %% to flag (e.g. 20.0). Default: no filter')
     parser.add_argument('--min-short-ratio', type=float, default=None,
@@ -219,6 +251,8 @@ def main():
     parser.add_argument('--save', action='store_true',
                         help='Save full results to CSV')
     args = parser.parse_args()
+    # Parse multi-timeframe list
+    mtf_list = [x.strip() for x in args.mtf.split(',')] if args.mtf else []
 
     # Load credentials
     api_key = os.getenv('SCHWAB_API_KEY')
@@ -240,7 +274,8 @@ def main():
         pattern_window=args.window,
         r2_threshold=args.r2,
         vwap_window=args.vwap_window,
-        volume_multiplier=args.volume_multiplier
+        volume_multiplier=args.volume_multiplier,
+        mtf_timeframes=mtf_list
     )
 
     # Get latest row once (for summary & current-state)
@@ -285,6 +320,12 @@ def main():
     print(f"TTM Squeeze FIRED    : {df['ttm_squeeze_fired'].sum():>5}  ({df['ttm_squeeze_fired'].mean()*100:>5.1f}%)")
     print(f"VWAP Bullish (↑VWAP) : {df['vwap_bullish'].sum():>5}  ({df['vwap_bullish'].mean()*100:>5.1f}%)  [price > VWAP & VWAP rising]")
     print(f"Volume Burst on Cross: {df['volume_burst_on_cross'].sum():>5}  ({df['volume_burst_on_cross'].mean()*100:>5.1f}%)  [shorts covering]")
+    if 'mtf_squeeze_count' in df.columns:
+        mtf_total = len(mtf_list) if mtf_list else 0
+        cur_mtf_count = current['mtf_squeeze_count']
+        print(f"MTF Squeeze Count   : {int(cur_mtf_count):>5}/{mtf_total}  active timeframes")
+        print(f"MTF Squeeze Any     : {current['mtf_squeeze_any']}")
+        print(f"MTF Squeeze All     : {current['mtf_squeeze_all']}")
     print(f"Short Float %        : {current['short_float_pct']:>5.1f}%  (as of {current['short_as_of_date']})")
     print(f"Short Ratio          : {current['short_ratio']:>5.2f} days")
     print(f"Short Data Source    : {current['short_data_source']}")
