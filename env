@@ -26,10 +26,11 @@ RISK_FREE_RATE=0.05  # 5% annual
 # Discord Alerts (optional)
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
 
+# hermes_tona_group
 # Telegram — rotate token via @BotFather if compromised
-TELEGRAM_BOT_TOKEN=8736550469:AAHs0HffO5cQ2fdSgrwUSgSZf0trxKSIxg4
+TELEGRAM_BOT_TOKEN=8696758915:AAFoCWJF7kNGCsvlpWJ1M4H3O5jERI3gPD0
 # Comma-separated chat IDs allowed to receive notifications and send commands
-TELEGRAM_CHAT_IDS=8562252056,-1003858943493,8617227882
+TELEGRAM_CHAT_IDS=8562252056,8617227882,-1005274448943
 
 # App Settings
 SECRET_KEY=change_this_in_production

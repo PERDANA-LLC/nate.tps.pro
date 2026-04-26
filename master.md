@@ -5,63 +5,6 @@
 > **Infrastructure:** Ubuntu 24.04 VPS + systemd services
 > **Alert URL:** `https://watch.dailyprofitslive.com/?channel=trades`
 
----
-
-advance feature:
-max contracts per trade = 1
-max dollar amount per trade = $1000
-
-
-menu: 
-/paper on/off
-/testmode on/off
-/equity on/off
-/options on/off
-/switch JOINT_TONA/ROTH_ANNA
-/reset  - clear all alerts, queues, logs, restart services
-/status - show current status
-/help - show help
-/config - show current config
-/last_pnl - show last PNL
-/logs - show last logs
-/backup - backup current root and home 
-
-tps-ttm
-
-trend: EMA 8, EMA 21, EMA 55: BULL, BEAR, NEUTRAL
-pattern: bull flag, bull pennant
-squeeze pro: Keltner channel + bollinger bands: 🟠 orange dot
- ─🩳  short float >20%  |  📅 days-to-cover >5 
-vwap: 💧 above VWAP↑
-volume: 📦 vol cross burst
-volume profile
-RAF
-
-target price: calculated using ATR 
-stop loss: calculated using ATR:  📐 ATR(14): 4.82  |  🎯 Target: $136.24  |  🛑 Stop: $126.78  
-multiple time frames: W, D, 195, 130, 78, 60, 30, 15, 10, 5: ⚡ multi-TF sqz (3)
-
----
-
-hey claude, review all my code base, detect errors, security issues, and improve it if possible.
-
----
-
-hey gemini, i have a vps running ubuntu 24.04 lts.                                                                                                   
-   and i am trading option programmatically with schwab developer api                                                                                   
-      how do i correlate my option trading with VXX                                                                                                     
-   write to @docs/VXX.md 
-
----
-
-fundamental analysis
-technical analysis
-options trading
-today's market news
-
-   ---
-
-
 
 ## How to Navigate to the Trade Feed
 
@@ -227,82 +170,6 @@ pip3 install requests python-dotenv schwab-py
 mkdir -p ~/trade-alerts ~/trade-log \
          ~/alert-bridge ~/logs ~/schwab-auth
 ```
-
-### Step 7a: Hash Value
-# Schwab Account Hash Values                                                                                                                                                                                 
-                                                                                                                                                                                                               
-  | Account Number | Hash Value |                                                                                                                                                                              
-  |---|---|                                                                                                                                                                                                    
-  | 55686714 | `FAB844331D2B573F17C82A55DF0FF37267F0D29645AB5266C96C37D8DC96D5A7` |                                                                                                                            
-  | 78720781 | `D5E295EAF40AD38CAB31F7B50A21AE4D59BC1115968A0E7048DDF0658A2D2DB9` |                                                                                                                            
-  | 90107168 | `0A81279CF5BAFA3BCA6669BA3D1A45F41F978DA7D60CF202CC95949947835388` |
-  | 92838340 | `612C5139DE9198AE4850D46F43243B161A427405CA6C1550C82E5476C4345611` |                                                                                                                            
-  | 95212569 | `CF51F2CB4CAE5E89D55670D77EF72246BE9E2E2A6CD3AFB74C1FA2003A3BFE5F` |                                                                                                                            
-  | 99058792 | `F956D28B537F6533DBB9D09C613380F640EF8FCC3351FA7C9A93E34C23056B24` |
-
-# FMP for fundamental analysis
-api="3mh3Peh9QyHCxY1QAOPdvr8zQlKH4QR3"
-  
-  # app password
-gideon.northseminole@gmail.com
-agenda="kzmu uuid siwh rhin"
-business.qbo@gmail.com
-nate.auto.trading="enyq sesr ahef kjwx"
-
-# @BotFather
-@nate_auto_trading_bot
-
-Done! Congratulations on your new bot. 
-You will find it at t.me/nate_auto_trading_bot. 
-You can now add a description, about section and profile picture for your bot, 
-see /help for a list of commands. By the way, when you've finished creating your cool bot, 
-ping our Bot Support if you want a better username for it. 
-Just make sure the bot is fully operational before you do this.
-
-Use this token to access the HTTP API:
-8736550469:AAHs0HffO5cQ2fdSgrwUSgSZf0trxKSIxg4
-Keep your token secure and store it safely, 
-it can be used by anyone to control your bot.
-
-For a description of the Bot API, 
-see this page: https://core.telegram.org/bots/api
-
-# @userinfobot
-Id: 8562252056
-First: Thomas
-Last: Perdana
-Lang: en
-
-
-
-
-
-# @BotFather
-Done! Congratulations on your new bot. 
-You will find it at t.me/tona_pcs_bot. 
-You can now add a description, about section and profile picture for your bot, 
-see /help for a list of commands. By the way, when you've finished creating your cool bot, 
-ping our Bot Support if you want a better username for it. 
-Just make sure the bot is fully operational before you do this.
-
-Use this token to access the HTTP API:
-8707057866:AAH9Rr1Bkatvq7D8Dufd6elBZu32Un9cj4Q
-Keep your token secure and store it safely, 
-it can be used by anyone to control your bot.
-
-For a description of the Bot API, see this page: https://core.telegram.org/bots/api
-
-# tona_pcs_group
-# Telegram — rotate token via @BotFather if compromised
-TELEGRAM_BOT_TOKEN=8707057866:AAH9Rr1Bkatvq7D8Dufd6elBZu32Un9cj4Q
-# Comma-separated chat IDs allowed to receive notifications and send commands
-TELEGRAM_CHAT_IDS=8562252056,8617227882,-1005059923222
-
-# nate.auto.trading.group
-# Telegram — rotate token via @BotFather if compromised
-TELEGRAM_BOT_TOKEN=8736550469:AAHs0HffO5cQ2fdSgrwUSgSZf0trxKSIxg4
-# Comma-separated chat IDs allowed to receive notifications and send commands
-TELEGRAM_CHAT_IDS=8562252056,-1003858943493,8617227882
 
 
 
@@ -1720,3 +1587,231 @@ ntfy → phone: "ORDER PLACED: BTO FSLY 26C @0.15 x67 ~$1,005 | ID 9876543210"
 *Last updated: 2026-04-20 | Stack: Playwright + Schwab API — VPS Ubuntu 24.04, systemd — no AI grading step*
 *Alert source: https://watch.dailyprofitslive.com/?channel=trades — click "Trades" tab (green) — blue/dark=skip, green=BTO, red=STC*
 *Real alert format: `bto FSLY 4/17 $26 calls @ .15` | `stc 2/3rd's FSLY 4/17 $26 calls @ .50` | `closing all FSLY`*
+
+
+
+
+***
+
+
+Running Hermes Agent with Gemma 4 on an M4 Mac creates an incredibly capable, fully private autonomous workspace. However, because both the model and the agent framework are cutting-edge (as of April 2026), there is a specific architectural quirk you need to navigate on Apple Silicon.
+
+### The Apple Silicon "Gotcha"
+If you try to run Gemma 4 through the standard Ollama backend on macOS right now, you will likely hit a known bug: Ollama currently struggles to parse Gemma 4's native tool-calling format. It ends up dumping the tool requests into the model's "reasoning" output rather than the standard JSON `tool_calls` array. 
+
+Because Hermes Agent relies on that specific JSON array to know when to execute a command, the agent will simply sit there and do nothing.
+
+**The Solution:** Bypass Ollama entirely and use **Rapid-MLX** (or `vllm-mlx`). This uses Apple's native MLX framework for blazing-fast inference on your M4 chip and correctly translates Gemma 4's tool calls server-side so Hermes can understand them.
+
+Here is the step-by-step guide to setting this up.
+
+### Step 1: Check Your Unified Memory
+First, ensure you are pulling the right Gemma 4 variant for your M4 Mac:
+* **16GB Unified Memory:** Stick to the **Gemma 4 8B** or the **E4B** variants.
+* **24GB - 32GB+ Unified Memory:** The **Gemma 4 26B MoE** (Mixture-of-Experts) is the sweet spot. It offers GPT-4 class reasoning but only activates ~3.8B parameters per token, making it incredibly fast on Apple Silicon.
+
+### Step 2: Install and Serve the Model (Rapid-MLX)
+Instead of Ollama, we will spin up a local server using `rapid-mlx`, which seamlessly handles the OpenAI-compatible formatting Hermes needs.
+
+1. Open your Terminal.
+2. Install the MLX server:
+   ```bash
+   pip install vllm-mlx
+   ```
+3. Start the server and pull your chosen model (we'll use the 26B MoE as the example):
+   ```bash
+   rapid-mlx serve gemma-4-26b
+   ```
+*Note: Keep this terminal window open and running in the background. It should expose an API at `http://localhost:8000/v1`.*
+
+### Step 3: Install Hermes Agent
+Open a new Terminal window. Nous Research provides a straightforward installation script for the agent:
+
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+
+### Step 4: Configure Hermes to Talk to Gemma
+Once Hermes is installed, you need to point it to your local Rapid-MLX server instead of a cloud provider.
+
+1. Run the setup wizard or directly edit the configuration:
+   ```bash
+   hermes config edit
+   ```
+2. Modify the configuration to use your local endpoint. Since it's a local model, you don't need a real API key, but the OpenAI compatibility layer usually requires *something* in the key field (a placeholder works). Set your configuration similar to this:
+
+   ```yaml
+   api_key: "local-mlx"
+   base_url: "http://localhost:8000/v1"
+   model: "gemma-4-26b"
+   ```
+
+### Step 5: Choose Your Sandbox and Launch
+Hermes Agent can execute commands directly on your local machine, but for safety, it is highly recommended to run its terminal backend inside Docker. 
+
+If you want to isolate the agent:
+1. Ensure Docker is running on your Mac.
+2. In your Hermes config, set the terminal backend:
+   ```yaml
+   terminal:
+     backend: docker
+     docker_mount_cwd_to_workspace: true
+   ```
+
+Finally, start your agent! 
+```bash
+hermes
+```
+
+You now have a persistent, self-improving agent running entirely on your M4 hardware. Because the MLX backend handles the tool-call parsing flawlessly, Hermes will be able to browse the web, write code, and execute terminal commands natively using Gemma 4's reasoning engine.
+
+
+***
+
+---
+
+advance feature:
+max contracts per trade = 1
+max dollar amount per trade = $1000
+
+
+menu: 
+/paper on/off
+/testmode on/off
+/equity on/off
+/options on/off
+/switch JOINT_TONA/ROTH_ANNA
+/reset  - clear all alerts, queues, logs, restart services
+/status - show current status
+/help - show help
+/config - show current config
+/last_pnl - show last PNL
+/logs - show last logs
+/backup - backup current root and home 
+
+tps-ttm
+
+trend: EMA 8, EMA 21, EMA 55: BULL, BEAR, NEUTRAL
+pattern: bull flag, bull pennant
+squeeze pro: Keltner channel + bollinger bands: 🟠 orange dot
+ ─🩳  short float >20%  |  📅 days-to-cover >5 
+vwap: 💧 above VWAP↑
+volume: 📦 vol cross burst
+volume profile
+RAF
+
+target price: calculated using ATR 
+stop loss: calculated using ATR:  📐 ATR(14): 4.82  |  🎯 Target: $136.24  |  🛑 Stop: $126.78  
+multiple time frames: W, D, 195, 130, 78, 60, 30, 15, 10, 5: ⚡ multi-TF sqz (3)
+
+---
+
+hey claude, review all my code base, detect errors, security issues, and improve it if possible.
+
+---
+
+hey gemini, i have a vps running ubuntu 24.04 lts.                                                                                                   
+   and i am trading option programmatically with schwab developer api                                                                                   
+      how do i correlate my option trading with VXX                                                                                                     
+   write to @docs/VXX.md 
+
+---
+
+fundamental analysis
+technical analysis
+options trading
+today's market news
+
+   ---
+
+
+***
+
+### Step 7a: Hash Value
+# Schwab Account Hash Values                                                                                                                                                                                 
+                                                                                                                                                                                                               
+  | Account Number | Hash Value |                                                                                                                                                                              
+  |---|---|                                                                                                                                                                                                    
+  | 55686714 | `FAB844331D2B573F17C82A55DF0FF37267F0D29645AB5266C96C37D8DC96D5A7` |                                                                                                                            
+  | 78720781 | `D5E295EAF40AD38CAB31F7B50A21AE4D59BC1115968A0E7048DDF0658A2D2DB9` |                                                                                                                            
+  | 90107168 | `0A81279CF5BAFA3BCA6669BA3D1A45F41F978DA7D60CF202CC95949947835388` |
+  | 92838340 | `612C5139DE9198AE4850D46F43243B161A427405CA6C1550C82E5476C4345611` |                                                                                                                            
+  | 95212569 | `CF51F2CB4CAE5E89D55670D77EF72246BE9E2E2A6CD3AFB74C1FA2003A3BFE5F` |                                                                                                                            
+  | 99058792 | `F956D28B537F6533DBB9D09C613380F640EF8FCC3351FA7C9A93E34C23056B24` |
+
+# FMP for fundamental analysis
+api="3mh3Peh9QyHCxY1QAOPdvr8zQlKH4QR3"
+  
+  # app password
+gideon.northseminole@gmail.com
+agenda="kzmu uuid siwh rhin"
+business.qbo@gmail.com
+nate.auto.trading="enyq sesr ahef kjwx"
+
+# @BotFather
+@nate_auto_trading_bot
+
+Done! Congratulations on your new bot. 
+You will find it at t.me/nate_auto_trading_bot. 
+You can now add a description, about section and profile picture for your bot, 
+see /help for a list of commands. By the way, when you've finished creating your cool bot, 
+ping our Bot Support if you want a better username for it. 
+Just make sure the bot is fully operational before you do this.
+
+Use this token to access the HTTP API:
+8736550469:AAHs0HffO5cQ2fdSgrwUSgSZf0trxKSIxg4
+Keep your token secure and store it safely, 
+it can be used by anyone to control your bot.
+
+For a description of the Bot API, 
+see this page: https://core.telegram.org/bots/api
+
+# @userinfobot
+Id: 8562252056
+First: Thomas
+Last: Perdana
+Lang: en
+
+
+
+
+
+# @BotFather
+Done! Congratulations on your new bot. 
+You will find it at t.me/tona_pcs_bot. 
+You can now add a description, about section and profile picture for your bot, 
+see /help for a list of commands. By the way, when you've finished creating your cool bot, 
+ping our Bot Support if you want a better username for it. 
+Just make sure the bot is fully operational before you do this.
+
+Use this token to access the HTTP API:
+8707057866:AAH9Rr1Bkatvq7D8Dufd6elBZu32Un9cj4Q
+Keep your token secure and store it safely, 
+it can be used by anyone to control your bot.
+
+For a description of the Bot API, see this page: https://core.telegram.org/bots/api
+
+
+
+
+# hermes_tona_group
+# Telegram — rotate token via @BotFather if compromised
+TELEGRAM_BOT_TOKEN=8696758915:AAFoCWJF7kNGCsvlpWJ1M4H3O5jERI3gPD0
+# Comma-separated chat IDs allowed to receive notifications and send commands
+TELEGRAM_CHAT_IDS=8562252056,8617227882,-1005274448943
+
+
+# tona_pcs_group
+# Telegram — rotate token via @BotFather if compromised
+TELEGRAM_BOT_TOKEN=8707057866:AAH9Rr1Bkatvq7D8Dufd6elBZu32Un9cj4Q
+# Comma-separated chat IDs allowed to receive notifications and send commands
+TELEGRAM_CHAT_IDS=8562252056,8617227882,-1005059923222
+
+# nate.auto.trading.group
+# Telegram — rotate token via @BotFather if compromised
+TELEGRAM_BOT_TOKEN=8736550469:AAHs0HffO5cQ2fdSgrwUSgSZf0trxKSIxg4
+# Comma-separated chat IDs allowed to receive notifications and send commands
+TELEGRAM_CHAT_IDS=8562252056,-1003858943493,8617227882
+
+
+***
