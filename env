@@ -1,0 +1,51 @@
+# Schwab API Configuration
+SCHWAB_CLIENT_ID=eQvUio57aVKbpNiWqLFaPpEikmFyNHAlpjgqU1LOaDF2ueJI
+SCHWAB_CLIENT_SECRET=XrB57JVKwAZJHn9RRnNBitNrb38HWI0dtzYtryTx64VD8lPeBloVg2TnoRGvRdLf
+SCHWAB_ACCOUNT_HASH=D5E295EAF40AD38CAB31F7B50A21AE4D59BC1115968A0E7048DDF0658A2D2DB9
+SCHWAB_CALLBACK_URL=https://127.0.0.1
+SCHWAB_AUTH_MODE=sandbox  # sandbox or live
+
+# Named accounts — set TRADING_ACCOUNT to switch
+TRADING_ACCOUNT=JOINT_TONA
+ACCOUNT_HASH_ROTH_ANNA=612C5139DE9198AE4850D46F43243B161A427405CA6C1550C82E5476C4345611
+ACCOUNT_HASH_JOINT_TONA=D5E295EAF40AD38CAB31F7B50A21AE4D59BC1115968A0E7048DDF0658A2D2DB9
+
+FMP_API_KEY=3mh3Peh9QyHCxY1QAOPdvr8zQlKH4QR3
+
+# Database
+DATABASE_URL=sqlite:///./options_detective.db
+# For PostgreSQL: postgresql://user:pass@localhost/optionsdetective
+
+# Trading Parameters
+PAPER_TRADING_MODE=True
+INITIAL_BALANCE=10000.00
+MAX_POSITION_SIZE=0.05  # 5% of portfolio per position
+MAX_DAILY_LOSS=0.02  # 2% daily loss limit
+RISK_FREE_RATE=0.05  # 5% annual
+
+# Discord Alerts (optional)
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+
+# Telegram — rotate token via @BotFather if compromised
+TELEGRAM_BOT_TOKEN=8736550469:AAHs0HffO5cQ2fdSgrwUSgSZf0trxKSIxg4
+# Comma-separated chat IDs allowed to receive notifications and send commands
+TELEGRAM_CHAT_IDS=8562252056,-1003858943493,8617227882
+
+# App Settings
+SECRET_KEY=change_this_in_production
+DEBUG=True
+HOST=127.0.0.1
+
+PAPER_TRADE=true
+TEST_MODE=true
+MAX_DAILY_TRADES=5
+ALLOW_EQUITY_TRADE=false
+ALLOW_OPTION_TRADE=true
+
+# Risk limits
+RISK_LIMIT_MODE=contracts
+MAX_CONTRACTS_PER_TRADE=1
+MAX_DOLLAR_PER_TRADE=1000
+
+# News sentiment filter (informational only)
+NEWS_FILTER_ENABLED=true
