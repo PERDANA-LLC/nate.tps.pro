@@ -13,7 +13,14 @@ Nate implements the **TPS+V** (Trend-Pattern-Squeeze-VWAP) scanner for high-prob
 - **S — SQUEEZE**: TTM Squeeze Pro via `pandas-ta.squeeze_pro` (Bollinger Bands inside Keltner Channels)
 - **V — VWAP**: Price above upward-sloping VWAP confirms intraday/stacked buying pressure
 - **Vol — VOLUME BURST**: Volume spike coinciding with VWAP cross (shorts covering)
-- **MTF — MULTI-TIMEFRAME**: Squeeze conformance across weekly, daily, and intraday intervals (default W,D,195,130,78,60,30,15,10,5)
+- **MTF — MULTI-TIMEFRAME**: Squeeze conformance across weekly, daily, and intraday intervals.
+  Default intervals: `W,D,195,130,78,60,30,15,10,5`.
+
+  Intraday interval handling:
+  - Standard Schwab intervals (1,5,10,15,30,60) are fetched natively.
+  - Non-standard intervals (195, 130, 78) are derived from 1-minute bars and resampled locally.
+  - All intraday queries are capped at 10 days of data (Schwab limit).
+  - If fewer than 20 bars are available after fetch/resample, squeeze=False and a warning is logged.
 
 **Augmentation:** Short Interest metrics (Short Float %, Short Ratio) provide fundamental context to TPS signals.
 
@@ -75,7 +82,12 @@ python strategies/tps_scanner.py --symbol SPY --vwap-window 20 --volume-multipli
 
 # Short interest filters: >20% short float + >3 days to cover
 python strategies/tps_scanner.py --symbol SPY --min-short-float 20 --min-short-ratio 3
+
+# Multi-timeframe squeeze custom intervals (195/130/78 derived from 1-minute bars)
+python strategies/tps_scanner.py --symbol SPY --mtf W,D,195,130,78,60,30,15,10,5
 ```
+
+**Note on non-standard intervals:** Schwab API natively supports only 1,5,10,15,30,60 minute frequencies. The default `--mtf` list includes 195, 130, and 78-minute intervals. These are handled by fetching 1-minute data and resampling locally. If insufficient 1-minute data is available (fewer than 20 bars after resampling), those timeframes will report `sqz_<tf> = False` with a warning.
 
 **Output columns (OHLCV + all signals):**
 | Category | Columns |

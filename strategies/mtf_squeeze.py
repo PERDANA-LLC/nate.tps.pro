@@ -4,16 +4,23 @@ Multi-timeframe TTM Squeeze analysis.
 Timeframes supported:
   - W  : weekly (resampled from daily)
   - D  : daily (uses existing daily squeeze)
-  - N  : N-minute intraday (e.g., 5, 15, 30, 60, 195, etc.)
+  - N  : N-minute intraday (e.g., 5, 15, 30, 60 --- native Schwab intervals)
+          Non-standard intervals (e.g., 195, 130, 78) are derived from 1-minute data.
+
+Intraday handling:
+  - Standard intervals (1,5,10,15,30,60): fetched directly from Schwab via frequency=N
+  - Non-standard intervals (e.g., 195,130,78): fetched as 1-minute bars and resampled locally
+  - All intraday fetches are capped at 10 days of history (Schwab limit)
+  - Requires >=20 bars to compute squeeze; otherwise sqz_<tf> = False with a warning
 
 For each timeframe, computes:
-  - sqz_<tf>          : squeeze active (any SQZPRO_ON_*)
-  - sqz_<tf>_fired    : squeeze breakout (SQZPRO_OFF_WIDE)
+  - sqz_<tf>        : squeeze active (any SQZPRO_ON_*)
+  - sqz_<tf>_fired  : squeeze breakout (SQZPRO_OFF_WIDE)
 
 Aggregate columns:
-  - mtf_squeeze_count : number of timeframes with active squeeze
-  - mtf_squeeze_any   : True if any timeframe has squeeze
-  - mtf_squeeze_all   : True if all requested timeframes have squeeze
+  - mtf_squeeze_count : int, count of active squeezes across all TF
+  - mtf_squeeze_any   : bool, any timeframe active
+  - mtf_squeeze_all   : bool, all timeframes active
 """
 
 import pandas as pd
@@ -104,36 +111,82 @@ def add_mtf_squeeze_columns(df_daily: pd.DataFrame, symbol: str, client,
                 print(f"Unknown timeframe spec: {tf}, skipping", flush=True)
                 continue
 
-            # Trade minutes per day = 390 (9:30-16:00). Compute days needed to get >=20 bars.
-            minutes_per_day = 390
-            bars_per_day = minutes_per_day // minutes if minutes > 0 else 0
-            if bars_per_day == 0:
-                bars_per_day = 1
-            days_needed = (20 + bars_per_day - 1) // bars_per_day  # ceiling
-            days_needed = max(1, min(days_needed, 10))  # cap at 10 days (Schwab limit)
+            # Schwab-supported intraday frequencies
+            SCHWAB_SUPPORTED = {1, 5, 10, 15, 30, 60}
 
-            try:
-                df_min = fetch_price_history(
-                    symbol,
-                    client,
-                    period_type='day',
-                    period=days_needed,
-                    frequency_type='minute',
-                    frequency=minutes
-                )
-                if df_min is None or len(df_min) < 20:
-                    print(f"Warning: insufficient minute data for {symbol} at {tf}min (got {len(df_min) if df_min is not None else 0} bars)", flush=True)
-                    active, fired = False, False
-                else:
-                    active, fired = _compute_squeeze_status(df_min)
-                df_daily[col_active] = active
-                df_daily[col_fired] = fired
-                statuses[tf] = (active, fired)
-            except Exception as e:
-                print(f"Error fetching {tf}min data for {symbol}: {e}", flush=True)
-                df_daily[col_active] = False
-                df_daily[col_fired] = False
-                statuses[tf] = (False, False)
+            if minutes in SCHWAB_SUPPORTED:
+                # Native Schwab interval — fetch directly
+                minutes_per_day = 390
+                bars_per_day = minutes_per_day // minutes if minutes > 0 else 0
+                if bars_per_day == 0:
+                    bars_per_day = 1
+                days_needed = (20 + bars_per_day - 1) // bars_per_day
+                days_needed = max(1, min(days_needed, 10))
+
+                try:
+                    df_min = fetch_price_history(
+                        symbol,
+                        client,
+                        period_type='day',
+                        period=days_needed,
+                        frequency_type='minute',
+                        frequency=minutes
+                    )
+                    if df_min is None or len(df_min) < 20:
+                        print(f"Warning: insufficient minute data for {symbol} at {tf}min (got {len(df_min) if df_min is not None else 0} bars)", flush=True)
+                        active, fired = False, False
+                    else:
+                        active, fired = _compute_squeeze_status(df_min)
+                    df_daily[col_active] = active
+                    df_daily[col_fired] = fired
+                    statuses[tf] = (active, fired)
+                except Exception as e:
+                    print(f"Error fetching {tf}min data for {symbol}: {e}", flush=True)
+                    df_daily[col_active] = False
+                    df_daily[col_fired] = False
+                    statuses[tf] = (False, False)
+
+            else:
+                # Non-standard interval — derive from 1-minute bars
+                print(f"Note: {tf}min is not a native Schwab interval — deriving from 1-minute data", flush=True)
+
+                # Fetch 1-minute data (max 10 days due to Schwab limits)
+                try:
+                    df_1min = fetch_price_history(
+                        symbol,
+                        client,
+                        period_type='day',
+                        period=10,
+                        frequency_type='minute',
+                        frequency=1
+                    )
+                    if df_1min is None or len(df_1min) < 20:
+                        print(f"Warning: insufficient 1-minute data for {symbol} to derive {tf}min (got {len(df_1min) if df_1min is not None else 0} bars)", flush=True)
+                        active, fired = False, False
+                    else:
+                        # Resample to target interval
+                        rule = f'{minutes}T'
+                        df_resampled = df_1min.resample(rule).agg({
+                            'open': 'first',
+                            'high': 'max',
+                            'low': 'min',
+                            'close': 'last',
+                            'volume': 'sum'
+                        }).dropna()
+
+                        if len(df_resampled) < 20:
+                            print(f"Warning: after resampling, {tf}min has only {len(df_resampled)} bars for {symbol} (need ≥20)", flush=True)
+                            active, fired = False, False
+                        else:
+                            active, fired = _compute_squeeze_status(df_resampled)
+                    df_daily[col_active] = active
+                    df_daily[col_fired] = fired
+                    statuses[tf] = (active, fired)
+                except Exception as e:
+                    print(f"Error deriving {tf}min from 1-minute data for {symbol}: {e}", flush=True)
+                    df_daily[col_active] = False
+                    df_daily[col_fired] = False
+                    statuses[tf] = (False, False)
 
     # Aggregates
     actives = [v[0] for v in statuses.values()]

@@ -142,6 +142,12 @@ def run_tps_scanner(symbol: str, client, ema_lengths: tuple = (8, 21, 55),
        timeframes (195,130,78,60,30,15,10,5 min) → sqz_<tf>, sqz_<tf>_fired,
        mtf_squeeze_count/any/all
 
+    MTF Intraday interval handling:
+      - Standard Schwab intervals (1,5,10,15,30,60) are fetched natively.
+      - Non-standard intervals (e.g., 195, 130, 78) are derived from 1-minute bars
+        and resampled locally. They log a note and require ≥20 resampled bars;
+        otherwise squeeze=False.
+
     Parameters
     ----------
     symbol : str
