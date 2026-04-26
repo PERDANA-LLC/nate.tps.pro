@@ -10,7 +10,7 @@ Nate implements the **TPS** (Trend-Pattern-Squeeze) scanner for high-probability
 
 - **T — TREND**: EMA alignment (8/21/55) from Schwab API
 - **P — PATTERN**: Bull flag & bull pennant detection (vectorized rolling regression)
-- **S — SQUEEZE**: TTM Squeeze Pro (Bollinger Bands contracted inside Keltner Channels) – coming soon
+- **S — SQUEEZE**: TTM Squeeze Pro via `pandas-ta.squeeze_pro` (Bollinger Bands inside Keltner Channels)
 
 ---
 
@@ -67,18 +67,21 @@ python strategies/tps_scanner.py --symbol SPY --window 10 --r2 0.8 --show 15 --s
 ```
 
 **Output columns (in addition to OHLCV + EMAs):**
-- `res_slope`, `sup_slope`, `res_r2`, `sup_r2` — pattern regression metrics
-- `bull_flag`, `bull_pennant` — pattern flags
-- `ttm_squeeze` — TTM Squeeze Pro (stub; returns `False` until implemented)
-- `tps_all` — True when ALL of T, P, S are True (currently `False` since S is stub)
-- `tps_score` — sum of individual signal flags (0–4)
+- Pattern regression: `res_slope`, `sup_slope`, `res_r2`, `sup_r2`
+- Pattern flags: `bull_flag`, `bull_pennant`
+- TTM Squeeze Pro raw: `SQZPRO_ON_NARROW`, `SQZPRO_ON_NORMAL`, `SQZPRO_ON_WIDE`, `SQZPRO_OFF_WIDE`
+- Derived squeeze flags:
+  - `ttm_squeeze` — True when ANY squeeze channel is active (NARROW/NORMAL/WIDE)
+  - `ttm_squeeze_fired` — True on the bar the squeeze releases (momentum impulse)
+- Composite: `tps_all` (all T, P, S true), `tps_score` (sum of component flags: 0–4)
 
 **Summary printed to console:**
 - Trend days %, Flag/Pennant hit rates
-- Current bar state and TPS Score
+- TTM Squeeze ON % (squeeze in progress) and Fired % (breakout events)
+- Current bar state and TPS Score (0–4)
 - Optional CSV export via `--save`
 
-**Note:** The Squeeze (S) column is currently a stub. Implementing true TTM Squeeze Pro logic is next.
+**Note:** `tps_all` requires `Upward_Trend` AND (bull flag OR pennant) AND `ttm_squeeze` (squeeze active). Use `ttm_squeeze_fired` as a timing trigger for entries.
 
 ## Project Structure
 
