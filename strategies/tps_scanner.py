@@ -19,6 +19,13 @@ import numpy as np
 import pandas as pd
 from typing import List
 
+# Ensure project root is on PYTHONPATH for absolute imports (strategies.*)
+if __name__ == '__main__' and os.path.dirname(__file__) not in sys.path:
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _project_root = os.path.dirname(_script_dir)
+    if _project_root not in sys.path:
+        sys.path.insert(0, _project_root)
+
 # Local imports (same repo)
 from strategies.ema_trend_analysis import fetch_price_history, calculate_emas, detect_upward_trend
 from strategies.pattern_detection import detect_patterns
