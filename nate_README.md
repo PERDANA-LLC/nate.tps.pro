@@ -13,6 +13,7 @@ Nate implements the **TPS+V** (Trend-Pattern-Squeeze-VWAP) scanner for high-prob
 - **S — SQUEEZE**: TTM Squeeze Pro via `pandas-ta.squeeze_pro` (Bollinger Bands inside Keltner Channels)
 - **V — VWAP**: Price above upward-sloping VWAP confirms intraday/stacked buying pressure
 - **Vol — VOLUME BURST**: Volume spike coinciding with VWAP cross (shorts covering)
+- **MTF — MULTI-TIMEFRAME**: Squeeze conformance across weekly, daily, and intraday intervals (default W,D,195,130,78,60,30,15,10,5)
 
 **Augmentation:** Short Interest metrics (Short Float %, Short Ratio) provide fundamental context to TPS signals.
 
@@ -86,6 +87,7 @@ python strategies/tps_scanner.py --symbol SPY --min-short-float 20 --min-short-r
 | Squeeze derived | `ttm_squeeze` (any ON), `ttm_squeeze_fired` (breakout) |
 | VWAP | `vwap` (rolling), `vwap_rising` (slope > 0), `price_above_vwap` |
 | Volume burst | `volume_ratio` (x avg), `volume_burst` (≥ threshold), `vwap_crossed`, `volume_burst_on_cross` |
+| Multi-timeframe Squeeze | `sqz_<tf>`, `sqz_<tf>_fired` (per timeframe in `--mtf`); aggregates `mtf_squeeze_count`, `mtf_squeeze_any`, `mtf_squeeze_all` |
 | Short interest | `short_float_pct`, `short_ratio`, `short_data_source`, `short_as_of_date` |
 | Filter overlay | `short_filter_met` — True when short thresholds pass (if any filters enabled) |
 | Composite | `tps_all` (T&P&S), `tps_vwap_all` (T&P&S&V), `perfect_setup` (all six), `tps_score` (sum 0–6) |
@@ -94,6 +96,7 @@ python strategies/tps_scanner.py --symbol SPY --min-short-float 20 --min-short-r
 - Upward Trend days %, Bull Flag/Pennant hit rates
 - TTM Squeeze ON % and Fired % (breakout events)
 - VWAP Bullish % and Volume Burst on Cross % (shorts covering)
+- MTF Squeeze Count/Any/All (multi-timeframe confluence)
 - Short Float % and Short Ratio (days to cover) with as-of date
 - TPS Score (0–6) and Perfect Setup count
 - Optional Short Filter PASS/FAIL status
@@ -107,6 +110,7 @@ python strategies/tps_scanner.py --symbol SPY --min-short-float 20 --min-short-r
 
 **CLI short filters:** Use `--min-short-float` and/or `--min-short-ratio` to restrict output to symbols meeting those thresholds. The scanner adds a `short_filter_met` column (PASS/FAIL) and prints the filter status in the summary. This does not affect `tps_all`; it's an external overlay for watchlist generation.
 
+**Multi-timeframe squeeze:** Use `--mtf` to specify which timeframes to evaluate for squeeze confluence (default: `W,D,195,130,78,60,30,15,10,5`). The scanner adds `sqz_<tf>` and `sqz_<tf>_fired` columns per timeframe and aggregate flags `mtf_squeeze_count`, `mtf_squeeze_any`, and `mtf_squeeze_all`.
 ---
 
 ### Short Interest Analyzer (Fundamental)
@@ -161,8 +165,9 @@ nate.tps.pro/
 ├── strategies/
 │   ├── ema_trend_analysis.py   # EMA alignment (T)
 │   ├── pattern_detection.py    # Bull flag & pennant (P)
-│   ├── tps_scanner.py          # Unified TPS + VWAP + Volume + Short run
+│   ├── tps_scanner.py          # Unified TPS + VWAP + Volume + Short + MTF run
 │   ├── short_interest.py       # Short Float % & Short Ratio
+│   ├── mtf_squeeze.py          # Multi-timeframe squeeze analysis
 │   └── requirements.txt        # Python dependencies
 └── README.md                   # This file
 ```
@@ -193,6 +198,7 @@ export ANALYSIS_SYMBOL="SPY"
 - [x] Short interest data (fundamental overlay)
 - [x] VWAP + volume burst (V + Vol)
 - [x] CLI filters: `--min-short-float`, `--min-short-ratio`
+- [x] Multi-timeframe squeeze (MTF) — weekly, daily, intraday squeeze confluence
 - [ ] Backtesting engine for TPS/VWAP signals
 - [ ] Multi-symbol watchlist scan
 - [ ] Real-time alerts (webhook / Telegram)
