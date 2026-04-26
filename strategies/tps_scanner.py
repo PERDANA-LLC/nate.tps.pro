@@ -20,6 +20,7 @@ import pandas as pd
 # Local imports (same repo)
 from strategies.ema_trend_analysis import fetch_price_history, calculate_emas, detect_upward_trend
 from strategies.pattern_detection import detect_patterns
+from strategies.short_interest import enrich_with_short_metrics
 
 
 def compute_tmm_squeeze(df: pd.DataFrame, squeeze_window: int = 20) -> pd.DataFrame:
@@ -60,7 +61,8 @@ def run_tps_scanner(symbol: str, client, ema_lengths: tuple = (8, 21, 55),
     1. Fetch OHLCV from Schwab
     2. Compute EMAs → Upward_Trend flag
     3. Run pattern detection → bull_flag, bull_pennant
-    4. Stub TTM Squeeze → ttm_squeeze (False until implemented)
+    4. Compute TTM Squeeze Pro (pandas-ta) → ttm_squeeze, ttm_squeeze_fired
+    5. Enrich with short interest (Short Float %, Short Ratio)
 
     Returns
     -------
@@ -74,17 +76,20 @@ def run_tps_scanner(symbol: str, client, ema_lengths: tuple = (8, 21, 55),
     # ---- P: PATTERN ----
     df = detect_patterns(df, window=pattern_window, r2_threshold=r2_threshold)
 
-    # ---- S: SQUEEZE (stub) ----
+    # ---- S: SQUEEZE ----
     df = compute_tmm_squeeze(df)
 
-    # ---- Composite Signals ----
+    # ---- FUNDAMENTAL: Short Interest ----
+    df = enrich_with_short_metrics(df, symbol)
+
+    # ---- Composite Signals (technical only) ----
     df['tps_all'] = (
         df['Upward_Trend'] &
         (df['bull_flag'] | df['bull_pennant']) &
-        df['ttm_squeeze']  # currently False → composite always False until squeeze implemented
+        df['ttm_squeeze']
     )
 
-    # Individual signal strength (weighted count)
+    # Individual signal strength (sum of binary flags: 0–4)
     df['tps_score'] = (
         df['Upward_Trend'].astype(int) +
         df['bull_flag'].astype(int) +
@@ -137,7 +142,9 @@ def main():
         'close', 'EMA_8', 'EMA_21', 'EMA_55', 'Upward_Trend',
         'bull_flag', 'bull_pennant',
         'SQZPRO_ON_NARROW', 'SQZPRO_ON_NORMAL', 'SQZPRO_ON_WIDE',
-        'ttm_squeeze', 'ttm_squeeze_fired', 'tps_score'
+        'ttm_squeeze', 'ttm_squeeze_fired',
+        'short_float_pct', 'short_ratio', 'short_data_source',
+        'tps_score'
     ]
 
     print(f"=== Latest {args.show} rows ===")
@@ -152,6 +159,9 @@ def main():
     print(f"Bull Pennant sigs  : {df['bull_pennant'].sum():>5}  ({df['bull_pennant'].mean()*100:>5.1f}%)")
     print(f"TTM Squeeze ON     : {df['ttm_squeeze'].sum():>5}  ({df['ttm_squeeze'].mean()*100:>5.1f}%)")
     print(f"TTM Squeeze FIRED  : {df['ttm_squeeze_fired'].sum():>5}  ({df['ttm_squeeze_fired'].mean()*100:>5.1f}%)")
+    print(f"Short Float %      : {current['short_float_pct']:>5.1f}%  (as of {current['short_as_of_date']})")
+    print(f"Short Ratio        : {current['short_ratio']:>5.2f} days")
+    print(f"Short Data Source  : {current['short_data_source']}")
 
     # Combined signal
     tps_count = df['tps_all'].sum()
@@ -164,6 +174,8 @@ def main():
     print(f"  Bull Pennant    : {current['bull_pennant']}")
     print(f"  TTM Squeeze ON  : {current['ttm_squeeze']}")
     print(f"  TTM Squeeze OFF : {current['ttm_squeeze_fired']}  ← momentum impulse")
+    print(f"  Short Float %   : {current['short_float_pct']}%")
+    print(f"  Short Ratio     : {current['short_ratio']} days to cover")
     print(f"  TPS Score       : {int(current['tps_score'])} / 4")
 
     if args.save:
