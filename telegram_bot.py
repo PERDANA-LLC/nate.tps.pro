@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJ_ROOT))
 load_dotenv(PROJ_ROOT / ".env")
 
 from tps_scan import TPS_SCAN, compute_mtf_squeeze  # noqa: E402
+from schwab_client import get_client
 
 # ── config ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -229,7 +230,7 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(f"🔍 Scanning {symbol}…")
 
     try:
-        df = await asyncio.to_thread(TPS_SCAN, symbol)
+        df = await asyncio.to_thread(TPS_SCAN, symbol, client=get_client())
     except Exception as e:
         await msg.edit_text(f"❌ Scan failed for {symbol}: {e}")
         log.exception("Scan failed: %s", symbol)
@@ -384,7 +385,7 @@ async def _do_watchlist_scan(context: ContextTypes.DEFAULT_TYPE):
 
     for symbol in wl:
         try:
-            df = await asyncio.to_thread(TPS_SCAN, symbol)
+            df = await asyncio.to_thread(TPS_SCAN, symbol, client=get_client())
         except Exception as e:
             log.warning("Scheduled scan failed for %s: %s", symbol, e)
             continue
@@ -456,6 +457,13 @@ async def post_init(app: Application):
         _schedule_scan(app.job_queue, interval)
 
     log.info("Bot started. Watchlist: %s, interval: %.1fh", cfg["watchlist"], interval)
+
+    # ── Init Schwab client for live data ──
+    try:
+        get_client()
+        log.info("Schwab client connected.")
+    except Exception as e:
+        log.warning("Schwab client unavailable (will run dry): %s", e)
 
 
 def main():
