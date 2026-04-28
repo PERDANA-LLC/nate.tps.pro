@@ -1,0 +1,9 @@
+{
+  "watchlist": [
+    "SPY",
+    "QQQ"
+  ],
+  "scan_interval_hours": 4,
+  "alert_threshold": 5,
+  "next_scan_at": null
+}
