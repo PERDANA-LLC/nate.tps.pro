@@ -25,6 +25,7 @@ CONFIG_PATH = os.path.join(ROOT, "telegram_config.json")
 load_dotenv(os.path.join(ROOT, ".env"))
 
 from schwab_client import get_client
+from broker_interface import get_broker
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 TARGET_CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
@@ -131,9 +132,23 @@ class TPSDiscordBot(discord.Client):
     
     @tasks.loop(hours=4)
     async def bg_scan_loop(self):
-        """Scheduled watchlist scan + alert."""
+        """Scheduled watchlist scan + alert. Rebuilds watchlist daily."""
         config = load_config()
         threshold = config.get("alert_threshold", 5)
+
+        # ── Daily watchlist rebuild ──
+        try:
+            from watchlist_builder import build_watchlist as _bw
+            last_built = config.get("_watchlist_built_at", "")
+            now_utc = datetime.now(timezone.utc)
+            if not last_built or (now_utc - datetime.fromisoformat(last_built)).total_seconds() > 23 * 3600:
+                log.info("🔄 Rebuilding watchlist (last built: %s)", last_built or "never")
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, _bw)
+                config = load_config()  # reload after build
+        except Exception as e:
+            log.error("Watchlist builder error: %s", e)
+
         watchlist = config.get("watchlist", [])
         interval = config.get("scan_interval_hours", 4)
         
@@ -299,6 +314,12 @@ async def cmd_help(interaction: discord.Interaction):
         "**TPS Scanner — Discord Bot**",
         "",
         "`/scan SYMBOL` — Run TPS_SCAN on a ticker",
+        "`/trade SYMBOL` — Buy 1 contract (paper)",
+        "`/close SYMBOL` — Close position (paper)",
+        "`/portfolio` — View P&L and positions",
+        "`/orders` — Recent trade history",
+        "`/autotrade SYMBOL` — Scan + buy if KPI > 5",
+        "`/reset` — Reset paper trading account",
         "`/watchlist` — View current watchlist",
         "`/add SYMBOL` — Add to watchlist",
         "`/remove SYMBOL` — Remove from watchlist",
@@ -313,8 +334,176 @@ async def cmd_help(interaction: discord.Interaction):
     await interaction.response.send_message("\n".join(lines))
 
 
-@bot.event
-async def on_ready():
+
+# ── Trading Import ─────────────────────────────────────────────────────────
+from broker_interface import get_broker
+
+
+# ── Trading Helpers ───────────────────────────────────────────────────────
+async def fetch_scan_price(symbol: str) -> dict:
+    """Run TPS_SCAN and return {'price': float, 'kpi': int, 'error': str|None}"""
+    row = await run_tps_scan(symbol)
+    if row is None:
+        return {"price": 0, "kpi": 0, "error": f"Could not scan {symbol}"}
+    price = row.get("close", 0)
+    if not price or price <= 0:
+        return {"price": 0, "kpi": 0, "error": f"No price for {symbol}"}
+    return {"price": price, "kpi": int(row.get("KPI_SCORE", 0)), "error": None}
+
+
+def fmt_portfolio(pf: dict) -> str:
+    lines = [
+        f"**Paper Portfolio**  💰",
+        f"Equity:   ${pf['equity']:,.2f}",
+        f"Cash:     ${pf['cash']:,.2f}",
+        f"Positions: {pf['position_count']}   |   Trades: {pf['trade_count']}",
+        f"Realized P&L:  ${pf['realized_pnl']:+,.2f}",
+        f"Unrealized:    ${pf['unrealized_pnl']:+,.2f}",
+        f"**Total P&L:  ${pf['total_pnl']:+,.2f}**",
+    ]
+    if pf["positions"]:
+        lines.append("")
+        lines.append("**Open Positions:**")
+        for p in pf["positions"]:
+            lines.append(
+                f"• {p['symbol']}  —  {p['qty']} @ ${p['avg_price']:.2f}  |  "
+                f"Last: ${p['last_price']:.2f}  |  P&L: ${p['pnl']:+,.2f}"
+            )
+    return "\n".join(lines)
+
+
+def fmt_orders(orders: list, limit: int = 10) -> str:
+    if not orders:
+        return "No orders yet."
+    lines = [f"**Recent Orders** (last {min(len(orders), limit)})"]
+    for o in orders[-limit:]:
+        side = "🟢 BUY" if o["side"] == "buy" else "🔴 SELL"
+        lines.append(
+            f"`{o['id'][:8]}` {side} {o['symbol']} "
+            f"{o['qty']} @ ${o['price']:.2f}  —  *{o['time'][:16].replace('T',' ')}*"
+        )
+    return "\n".join(lines)
+
+
+# ── Trading Commands ─────────────────────────────────────────────────────
+@bot.tree.command(name="trade", description="Buy 1 contract (paper trade)")
+@app_commands.describe(symbol="Stock symbol to buy (e.g. SPY)")
+async def cmd_trade(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer(thinking=True)
+    symbol = symbol.upper()
+    broker = get_broker()
+
+    r = await fetch_scan_price(symbol)
+    if r["error"]:
+        await interaction.followup.send(f"❌ {r['error']}")
+        return
+
+    # Check if already holding
+    pos = broker.get_positions()
+    if any(p["symbol"] == symbol for p in pos):
+        await interaction.followup.send(
+            f"⚠️ Already holding **{symbol}**. Use `/close {symbol}` first."
+        )
+        return
+
+    order = broker.buy(symbol, r["price"])
+    await interaction.followup.send(
+        f"🟢 **Bought {symbol}**\n"
+        f"Price: ${r['price']:.2f}  |  KPI: {r['kpi']}/9\n"
+        f"Order: `{order['id'][:8]}`  |  Equity: ${broker.get_portfolio()['equity']:,.2f}"
+    )
+
+
+@bot.tree.command(name="close", description="Close position (paper trade)")
+@app_commands.describe(symbol="Stock symbol to close")
+async def cmd_close(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer(thinking=True)
+    symbol = symbol.upper()
+    broker = get_broker()
+
+    r = await fetch_scan_price(symbol)
+    if r["error"]:
+        await interaction.followup.send(f"❌ {r['error']}")
+        return
+
+    order = broker.close_position(symbol, r["price"])
+    if order is None:
+        await interaction.followup.send(f"⚠️ No position in **{symbol}**.")
+        return
+
+    pnl = order.get("pnl", 0)
+    emoji = "🟢" if pnl >= 0 else "🔴"
+    await interaction.followup.send(
+        f"{emoji} **Closed {symbol}**\n"
+        f"Exit: ${r['price']:.2f}  |  P&L: ${pnl:+,.2f}\n"
+        f"Order: `{order['id'][:8]}`  |  Equity: ${broker.get_portfolio()['equity']:,.2f}"
+    )
+
+
+@bot.tree.command(name="portfolio", description="Show paper portfolio")
+async def cmd_portfolio(interaction: discord.Interaction):
+    broker = get_broker()
+    # Update prices for open positions
+    for pos in broker.get_positions():
+        r = await fetch_scan_price(pos["symbol"])
+        if not r["error"]:
+            broker.update_prices({pos["symbol"]: r["price"]})
+
+    pf = broker.get_portfolio()
+    await interaction.response.send_message(fmt_portfolio(pf))
+
+
+@bot.tree.command(name="orders", description="Show recent paper orders")
+async def cmd_orders(interaction: discord.Interaction):
+    broker = get_broker()
+    orders = broker.get_orders(limit=10)
+    await interaction.response.send_message(fmt_orders(orders))
+
+
+@bot.tree.command(name="autotrade", description="Scan + buy if KPI > 5 (paper trade)")
+@app_commands.describe(symbol="Stock symbol to scan & trade")
+async def cmd_autotrade(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer(thinking=True)
+    symbol = symbol.upper()
+    broker = get_broker()
+
+    r = await fetch_scan_price(symbol)
+    if r["error"]:
+        await interaction.followup.send(f"❌ {r['error']}")
+        return
+
+    kpi = r["kpi"]
+    if kpi <= 5:
+        await interaction.followup.send(
+            f"⏸️ **{symbol}** KPI={kpi}/9 — below auto-trade threshold (6+). No trade."
+        )
+        return
+
+    pos = broker.get_positions()
+    if any(p["symbol"] == symbol for p in pos):
+        await interaction.followup.send(
+            f"⚠️ Already holding **{symbol}** (KPI={kpi}/9). Use `/close` first."
+        )
+        return
+
+    order = broker.buy(symbol, r["price"])
+    await interaction.followup.send(
+        f"🤖 **Auto-traded {symbol}**\n"
+        f"KPI: {kpi}/9  |  Price: ${r['price']:.2f}\n"
+        f"Order: `{order['id'][:8]}`  |  Equity: ${broker.get_portfolio()['equity']:,.2f}"
+    )
+
+
+@bot.tree.command(name="reset_paper", description="Reset paper trading state")
+async def cmd_reset_paper(interaction: discord.Interaction):
+    from broker_interface import reset_broker
+    reset_broker()
+    broker = get_broker()
+    broker.reset()
+    await interaction.response.send_message(
+        f"🔄 Paper trading reset. Initial capital: ${broker.get_portfolio()['initial_capital']:,.2f}"
+    )
+
     log.info(f"Logged in as {bot.user.name} ({bot.user.id})")
     # Init Schwab client for live data
     try:

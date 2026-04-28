@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "initial_capital": 10000.0,
+  "cash": 10000.0,
+  "positions": [],
+  "orders": [],
+  "trade_count": 0,
+  "total_pnl": 0.0,
+  "realized_pnl": 0.0,
+  "created_at": "2026-04-28T14:12:37.452020+00:00"
+}

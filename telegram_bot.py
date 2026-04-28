@@ -29,6 +29,7 @@ load_dotenv(PROJ_ROOT / ".env")
 
 from tps_scan import TPS_SCAN, compute_mtf_squeeze  # noqa: E402
 from schwab_client import get_client
+from broker_interface import get_broker, reset_broker
 
 # ── config ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -205,6 +206,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "TREND + PATTERN + SQUEEZE scanner.\n\n"
         "Commands:\n"
         "/scan SYMBOL — scan a ticker\n"
+        "/trade SYMBOL — buy 1 contract (paper)\n"
+        "/close SYMBOL — close position (paper)\n"
+        "/portfolio — P&L and positions\n"
+        "/orders — trade history\n"
+        "/reset — reset paper account\n"
         "/watchlist — show list\n"
         "/add SYMBOL — add to watchlist\n"
         "/remove SYMBOL — remove\n"
@@ -366,14 +372,166 @@ async def cmd_set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _schedule_scan(context.job_queue, hours)
 
-    await update.message.reply_text(f"⏱ Scan interval set to {hours}h")
+
+# ── Paper Trading Commands ──────────────────────────────────────────────────
+
+async def _do_tps_scan(symbol: str):
+    """Run TPS_SCAN in thread. Returns (row_dict, close_price) or (None, None)."""
+    try:
+        df = await asyncio.to_thread(TPS_SCAN, symbol, client=get_client())
+        if df is None or df.empty:
+            return None, None
+        row = df.iloc[-1].to_dict()
+        price = row.get("close", 0)
+        return row, price
+    except Exception:
+        return None, None
 
 
-# ── scheduled scan ───────────────────────────────────────────────
+@_auth_only
+async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Buy 1 contract of symbol at current close price."""
+    symbol = "".join(context.args).strip().upper() if context.args else ""
+    if not symbol:
+        await update.message.reply_text("Usage: /trade SYMBOL  (e.g. /trade SPY)")
+        return
+    
+    msg = await update.message.reply_text(f"🔍 Scanning {symbol} for trade…")
+    row, price = await _do_tps_scan(symbol)
+    
+    if row is None:
+        await msg.edit_text(f"⚠️ No data for {symbol}")
+        return
+    
+    broker = get_broker()
+    # Check if already holding this symbol (max 1 contract)
+    pf = broker.get_portfolio()
+    for pos in pf.get("positions", []):
+        if pos["symbol"] == symbol:
+            await msg.edit_text(f"⚠️ Already holding **{symbol}** (1 contract max). Use /close first.")
+            return
+    
+    order = broker.buy(symbol, price)
+    await msg.edit_text(
+        f"✅ **BUY {symbol}**\n"
+        f"💰 Price: ${price:.2f}\n"
+        f"📝 Order: `{order['id']}`\n"
+        f"⏱️ Time: {order['time']}",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+@_auth_only
+async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Close position for symbol at current price."""
+    symbol = "".join(context.args).strip().upper() if context.args else ""
+    if not symbol:
+        await update.message.reply_text("Usage: /close SYMBOL  (e.g. /close SPY)")
+        return
+    
+    msg = await update.message.reply_text(f"🔍 Scanning {symbol} to close…")
+    row, price = await _do_tps_scan(symbol)
+    
+    broker = get_broker()
+    pf = broker.get_portfolio()
+    has_position = any(p["symbol"] == symbol for p in pf.get("positions", []))
+    
+    if not has_position:
+        await msg.edit_text(f"⚠️ No position in **{symbol}**")
+        return
+    
+    order = broker.close_position(symbol, price)
+    pnl_text = f"\n📈 P&L: ${order['pnl']:+.2f}" if order.get('pnl') is not None else ""
+    await msg.edit_text(
+        f"✅ **CLOSE {symbol}**\n"
+        f"💰 Price: ${price:.2f}{pnl_text}\n"
+        f"📝 Order: `{order['id']}`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+@_auth_only
+async def cmd_portfolio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show paper trading portfolio."""
+    broker = get_broker()
+    pf = broker.get_portfolio()
+    
+    lines = [
+        "📊 **Paper Portfolio**",
+        "",
+        f"💵 Cash: ${pf['cash']:,.2f}",
+        f"📦 Position Value: ${pf['position_value']:,.2f}",
+        f"📈 Equity: ${pf['equity']:,.2f}",
+        f"📉 Unrealized P&L: ${pf['unrealized_pnl']:+,.2f}",
+        f"✅ Realized P&L: ${pf['realized_pnl']:+,.2f}",
+        f"📊 Total P&L: ${pf['total_pnl']:+,.2f}",
+        f"💼 Trades: {pf['trade_count']}",
+    ]
+    
+    if pf.get("positions"):
+        lines.append("")
+        lines.append("**Open Positions:**")
+        for pos in pf["positions"]:
+            lines.append(f"  • {pos['symbol']} @ ${pos['avg_price']:.2f} (entry: {pos.get('entry_time','?')})")
+    else:
+        lines.append("")
+        lines.append("_No open positions_")
+    
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
+@_auth_only
+async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show recent trade orders."""
+    broker = get_broker()
+    orders = broker.get_orders()
+    
+    if not orders:
+        await update.message.reply_text("📋 No orders yet.")
+        return
+    
+    recent = orders[-10:]  # last 10
+    lines = ["📋 **Recent Orders**", ""]
+    for o in reversed(recent):
+        emoji = "🟢" if o["side"] == "buy" else "🔴"
+        pnl_str = f" P&L: ${o['pnl']:+.2f}" if o.get("pnl") is not None else ""
+        lines.append(f"{emoji} {o['symbol']} {o['side'].upper()} x{o['qty']} @ ${o['price']:.2f}{pnl_str}")
+        lines.append(f"   `{o['id']}` | {o.get('time','')}")
+    
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
+@_auth_only
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reset paper trading account."""
+    from broker_interface import reset_broker
+    reset_broker()
+    broker = get_broker()
+    broker.reset()
+    await update.message.reply_text(
+        f"🔄 Paper trading reset. Initial capital: ${broker.get_portfolio()['initial_capital']:,.2f}"
+    )
+
 
 async def _do_watchlist_scan(context: ContextTypes.DEFAULT_TYPE):
-    """Scan every symbol in the watchlist. Alert if KPI >= threshold."""
+    """Scan every symbol in the watchlist. Alert if KPI >= threshold.
+    
+    Rebuilds watchlist daily before scanning.
+    """
     cfg = load_config()
+
+    # ── Daily watchlist rebuild ──
+    try:
+        from watchlist_builder import build_watchlist as _bw
+        last_built = cfg.get("_watchlist_built_at", "")
+        now_utc = datetime.now(timezone.utc)
+        if not last_built or (now_utc - datetime.fromisoformat(last_built)).total_seconds() > 23 * 3600:
+            log.info("🔄 Rebuilding watchlist (last built: %s)", last_built or "never")
+            await asyncio.to_thread(_bw)
+            cfg = load_config()  # reload after build
+    except Exception as e:
+        log.exception("Watchlist builder error: %s", e)
+
     wl = cfg.get("watchlist", [])
     threshold = cfg.get("alert_threshold", 5)
 
@@ -448,6 +606,11 @@ async def post_init(app: Application):
         BotCommand("remove", "Remove from watchlist — /remove AAPL"),
         BotCommand("status", "Bot status"),
         BotCommand("set_interval", "Set scan interval in hours"),
+        BotCommand("trade", "Buy 1 contract (paper) — /trade SPY"),
+        BotCommand("close", "Close position (paper) — /close SPY"),
+        BotCommand("portfolio", "View P&L and positions"),
+        BotCommand("orders", "Recent trade history"),
+        BotCommand("reset", "Reset paper trading account"),
     ]
     await app.bot.set_my_commands(commands)
 
@@ -484,6 +647,11 @@ def main():
     app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("set_interval", cmd_set_interval))
+    app.add_handler(CommandHandler("trade", cmd_trade))
+    app.add_handler(CommandHandler("close", cmd_close))
+    app.add_handler(CommandHandler("portfolio", cmd_portfolio))
+    app.add_handler(CommandHandler("orders", cmd_orders))
+    app.add_handler(CommandHandler("reset", cmd_reset))
 
     log.info("Starting polling…")
     app.run_polling(allowed_updates=["message"])
