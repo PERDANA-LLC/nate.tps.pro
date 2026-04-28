@@ -195,50 +195,68 @@ async def authenticate(context: BrowserContext) -> bool:
 
 async def scrape_alerts(page: Page) -> list[dict]:
     """
-    Scrape trade alerts from the page. Adapt selectors to the actual DOM.
-
-    Strategy: Try multiple common patterns. The trades page likely has
-    a list of cards/rows with trade details (ticker, action, price, etc.).
-    Returns list of alert dicts with at least 'id' (or hash) for dedup.
+    Scrape trade alert CARDS from the trade feed.
+    Cards: div.relative.w-full.p-2.rounded-lg with color-coded backgrounds.
+      bg-green-400  (74,222,128)  → BUY/BTO
+      bg-red-400    (248,113,113) → SELL/STC/STOP HIT
+      bg-cyan-400   (34,211,238)  → Informational (NOT a trade)
+      bg-yellow-400 (250,204,21)  → Alert/Warning
+    Deduplicates by text hash.
     """
+    import re
+
     alerts = []
+    ticker_re = re.compile(r'\b[A-Z]{2,5}\b')
+    trade_re = re.compile(r'\b(calls|puts|stc|btc|stop|target|entry|exit|filled|closed|closing|adding|sold|bought)\b',
+                          re.IGNORECASE)
 
-    # We don't know the exact DOM yet — probe on first run and adapt
-    # Strategy 1: Look for message/chat bubbles (common for alerts)
-    messages = await page.locator("[class*='message'], [class*='alert'], "
-                                   "[class*='trade'], [class*='notification'], "
-                                   "[class*='chat'], [class*='post'], "
-                                   "[class*='card'], [class*='row'], "
-                                   "[class*='entry'], [class*='item']").all()
+    cards = await page.locator(
+        "div.relative.w-full.p-2.rounded-lg"
+    ).all()
 
-    if not messages:
-        # Strategy 2: Look for any text blocks that might be trades
-        # Just log all visible text and let the caller decide
-        body_text = await page.inner_text("body")
-        # Simple heuristic: look for ticker-like patterns
-        import re
-        ticker_pattern = re.compile(r'\b[A-Z]{1,5}\b')
-        for line in body_text.split('\n'):
-            line = line.strip()
-            if line and len(line) > 10:
-                alerts.append({
-                    "id": str(hash(line)),
-                    "text": line,
-                    "time": datetime.now(timezone.utc).isoformat()
-                })
+    if not cards:
+        log.warning("No rounded-lg cards found — page may not be loaded yet")
+        return alerts
 
-    for el in messages:
+    for card in cards:
         try:
-            text = (await el.inner_text()).strip()
-            if not text or len(text) < 3:
+            text = (await card.inner_text()).strip()
+            if not text or len(text) < 8:
                 continue
-            html = await el.inner_html()
-            alert_id = str(hash(text + html[:100]))
+
+            # Get background color
+            bg = ""
+            try:
+                bg = await card.evaluate(
+                    "el => getComputedStyle(el).backgroundColor"
+                )
+            except Exception:
+                pass
+
+            # Determine type from bg color
+            alert_type = "unknown"
+            if "74, 222, 128" in bg or "74,222,128" in bg:
+                alert_type = "buy"
+            elif "248, 113, 113" in bg or "248,113,113" in bg:
+                alert_type = "sell"
+            elif "34, 211, 238" in bg or "34,211,238" in bg:
+                alert_type = "info"
+            elif "250, 204, 21" in bg or "250,204,21" in bg:
+                alert_type = "warning"
+
+            # Skip info posts (cyan) UNLESS they contain trade keywords
+            if alert_type == "info" and not trade_re.search(text):
+                # Still include if it has a ticker
+                if not ticker_re.search(text):
+                    continue
+
+            alert_id = str(hash(text[:200]))
             alerts.append({
                 "id": alert_id,
+                "type": alert_type,
                 "text": text,
+                "bg": bg,
                 "time": datetime.now(timezone.utc).isoformat(),
-                "element": html[:300],
             })
         except Exception:
             continue
@@ -256,17 +274,40 @@ MUTATION_OBSERVER_JS = """
     window.__dplMonitorSetup = true;
     window.__dplNewAlerts = [];
 
+    function isVisible(el) {
+        if (!el || el.nodeType !== 1) return false;
+        const style = getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    }
+
+    function extractCard(el) {
+        // Find the nearest rounded-lg trade card
+        let card = el;
+        if (!el.classList.contains('rounded-lg')) {
+            card = el.querySelector('[class*="rounded-lg"]') || el.closest('[class*="rounded-lg"]');
+        }
+        if (!card || !isVisible(card)) return null;
+        const text = (card.innerText || card.textContent || '').trim();
+        if (text.length < 10) return null;
+        const bg = getComputedStyle(card).backgroundColor;
+        return { text: text.slice(0, 600), bg: bg, time: new Date().toISOString() };
+    }
+
     const callback = (mutationsList) => {
         for (const mutation of mutationsList) {
             for (const node of mutation.addedNodes) {
-                if (node.nodeType === 1) { // Element node
-                    const text = (node.innerText || node.textContent || '').trim();
-                    if (text.length > 5) {
-                        window.__dplNewAlerts.push({
-                            text: text.slice(0,500),
-                            html: node.outerHTML?.slice(0,800) || '',
-                            time: new Date().toISOString()
-                        });
+                if (node.nodeType !== 1) continue;
+                // Direct card
+                const info = extractCard(node);
+                if (info) { window.__dplNewAlerts.push(info); continue; }
+                // Nested cards (scanned from container)
+                if (node.querySelectorAll) {
+                    const cards = node.querySelectorAll('[class*="rounded-lg"]');
+                    for (const c of cards) {
+                        const cinfo = extractCard(c);
+                        if (cinfo && !window.__dplNewAlerts.some(a => a.text === cinfo.text)) {
+                            window.__dplNewAlerts.push(cinfo);
+                        }
                     }
                 }
             }
@@ -274,12 +315,10 @@ MUTATION_OBSERVER_JS = """
     };
 
     const observer = new MutationObserver(callback);
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: false,
-        attributes: false
-    });
+    const feed = document.querySelector('[class*="overflow-y-scroll"]') ||
+                 document.querySelector('[class*="overflow-y-auto"]') ||
+                 document.body;
+    observer.observe(feed, { childList: true, subtree: true });
     return 'setup-complete';
 }
 """
@@ -301,8 +340,24 @@ async def flush_mutation_alerts(page: Page) -> list[dict]:
             hid = str(hash(a.get("text", "")))
             if hid not in seen:
                 seen.add(hid)
-                deduped.append({"id": hid, "text": a.get("text", ""),
-                                "time": a.get("time", ""), "element": a.get("html", "")})
+                # Classify type from bg color
+                bg = a.get("bg", "")
+                alert_type = "unknown"
+                if "74, 222, 128" in bg or "74,222,128" in bg:
+                    alert_type = "buy"
+                elif "248, 113, 113" in bg or "248,113,113" in bg:
+                    alert_type = "sell"
+                elif "34, 211, 238" in bg or "34,211,238" in bg:
+                    alert_type = "info"
+                elif "250, 204, 21" in bg or "250,204,21" in bg:
+                    alert_type = "warning"
+                deduped.append({
+                    "id": hid,
+                    "type": alert_type,
+                    "text": a.get("text", ""),
+                    "time": a.get("time", ""),
+                    "bg": bg,
+                })
         return deduped
     except Exception:
         return []
@@ -353,6 +408,22 @@ class AlertMonitor:
             # Inject mutation observer
             result = await page.evaluate(MUTATION_OBSERVER_JS)
             log.info("Mutation observer: %s", result)
+
+            # Dismiss OneSignal notification popup if present
+            try:
+                dismissed = await page.evaluate("""
+                    () => {
+                        const os = document.getElementById('onesignal-slidedown-container');
+                        if (os) { os.remove(); return true; }
+                        const dialog = document.querySelector('[class*="onesignal"]');
+                        if (dialog) { dialog.remove(); return true; }
+                        return false;
+                    }
+                """)
+                if dismissed:
+                    log.info("Hid OneSignal popup via JS")
+            except Exception:
+                log.debug("No OneSignal popup or already dismissed")
 
             # Initial scrape for existing content
             existing = await scrape_alerts(page)
@@ -406,10 +477,13 @@ class AlertMonitor:
 
     @staticmethod
     def _print_alert(alert: dict):
-        """Default alert handler: print to stdout."""
+        """Default alert handler: print to stdout with type-specific formatting."""
         ts = alert.get("time", "")[:19]
         text = alert.get("text", "").replace("\n", " | ")
-        log.info(f"🟢 NEW ALERT [{ts}] {text}")
+        atype = alert.get("type", "unknown")
+        emoji = {"buy": "🟢 BUY", "sell": "🔴 SELL", "info": "🔵 INFO",
+                 "warning": "🟡 WARN", "unknown": "⚪ ALERT"}.get(atype, "⚪ ALERT")
+        log.info(f"{emoji} [{ts}] {text[:200]}")
 
 
 # ---------------------------------------------------------------------------
