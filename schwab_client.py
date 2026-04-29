@@ -164,8 +164,8 @@ def _make_oauth_callback(callback_url: str) -> callable:
         print(f"[Schwab OAuth] Waiting for authorization on {scheme}://{host}:{port} …")
         print(f"[Schwab OAuth] If the browser does not open, visit:\n    {auth_url}")
 
-        # ── wait (max 180 s) ──
-        deadline = time.monotonic() + 180
+        # ── wait (max 5 s) ── (TLS will fail quickly; fallback to manual paste)
+        deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             if captured:
                 server_thread.join(timeout=2)
@@ -176,14 +176,26 @@ def _make_oauth_callback(callback_url: str) -> callable:
                 return captured[0]
             time.sleep(0.5)
 
-        # Timeout
+        # ── fallback: user may have seen the redirect URL but TLS blocked it ──
+        print("[Schwab OAuth] TLS redirect not received — reading from fallback file.")
         try:
             server.server_close()
         except Exception:
             pass
+        fb_file = cert_dir / ".oauth_fallback_url.txt"
+        print(f"[Schwab OAuth] Waiting for callback URL in: {fb_file}")
+        # Poll for 180s
+        fb_deadline = time.monotonic() + 180
+        while time.monotonic() < fb_deadline:
+            if fb_file.exists():
+                redirect_url = fb_file.read_text().strip()
+                if redirect_url:
+                    fb_file.unlink()
+                    return redirect_url
+            time.sleep(0.5)
         raise TimeoutError(
             "OAuth timed out after 180 s — browser redirect was not received.\n"
-            "Make sure Schwab's redirect URI matches this server's address.\n"
+            f"Paste the callback URL into: {fb_file}\n"
             f"Expected: {callback_url}"
         )
 
