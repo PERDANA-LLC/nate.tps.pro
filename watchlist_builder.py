@@ -115,11 +115,9 @@ def _prefilter_by_price_volume(symbols: List[str], client, max_workers: int = 10
     if not symbols:
         return []
 
-    from schwab.quotes import Quote
-
     def _batch(syms: List[str]) -> List[str]:
         try:
-            resp = client.get_quotes(syms)
+            resp = client.quotes(symbols=syms)
             if not resp or not hasattr(resp, 'json'):
                 return []
             data = resp.json()
@@ -166,7 +164,7 @@ def _scan_one(symbol: str, client) -> Optional[dict]:
     from tps_scan import TPS_SCAN
 
     try:
-        df = TPS_SCAN(symbol, months=2, client=client)
+        df = TPS_SCAN(symbol, months=6, client=client)
         if df is None or df.empty:
             return None
         row = df.iloc[-1].to_dict()

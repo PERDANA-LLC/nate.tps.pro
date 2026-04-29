@@ -1,9 +1,8 @@
 {
-  "watchlist": [
-    "SPY",
-    "QQQ"
-  ],
+  "watchlist": [],
   "scan_interval_hours": 4,
   "alert_threshold": 5,
-  "next_scan_at": null
+  "next_scan_at": null,
+  "_watchlist_built_at": "2026-04-29T16:58:38.787937+00:00",
+  "_watchlist_size": 0
 }

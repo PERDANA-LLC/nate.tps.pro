@@ -67,11 +67,20 @@ def _fetch_daily_candles(
 
 def _compute_trend(df: pd.DataFrame) -> pd.DataFrame:
     """Add EMA_8/21/55 and Upward_Trend / Downward_Trend booleans in-place."""
+    n = len(df)
     df.ta.ema(length=8, append=True)
     df.ta.ema(length=21, append=True)
-    df.ta.ema(length=55, append=True)
-    df["Upward_Trend"] = (df["EMA_8"] > df["EMA_21"]) & (df["EMA_21"] > df["EMA_55"])
-    df["Downward_Trend"] = (df["EMA_8"] < df["EMA_21"]) & (df["EMA_21"] < df["EMA_55"])
+    if n >= 55:
+        df.ta.ema(length=55, append=True)
+    elif n >= 5:
+        df.ta.ema(length=n//2, append=True)
+    else:
+        df["EMA_55"] = df["close"]
+    # Use last available EMA column for "long" EMA comparison
+    ema_cols = [c for c in df.columns if c.startswith("EMA_")]
+    ema_long = ema_cols[-1] if ema_cols else "EMA_55"
+    df["Upward_Trend"] = (df["EMA_8"] > df["EMA_21"]) & (df["EMA_21"] > df[ema_long])
+    df["Downward_Trend"] = (df["EMA_8"] < df["EMA_21"]) & (df["EMA_21"] < df[ema_long])
     return df
 
 
