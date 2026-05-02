@@ -12,9 +12,13 @@ env/
 
 # Env / secrets
 .env
+.env.trade
 *.env.local
 tokens.json
 schwab_tokens.json
+
+# Auth / sessions
+schwab-auth/
 
 # macOS
 .DS_Store

@@ -1,72 +1,107 @@
 #!/usr/bin/env python3
 """
 Shared notification module for trade alert system.
-Sends to ntfy push + 4 email addresses (SMTP).
+Sends to Telegram + Discord (configurable via NOTIFY_TELEGRAM / NOTIFY_DISCORD).
+
+Telegram: uses bot token + chat IDs (supports groups, channels, DMs).
+Discord:  uses bot token + channel ID (HTTP API).
 """
 import os
-import smtplib
+import json
+import datetime
 import requests
-from email.mime.text import MIMEText
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env.trade")
 
-EMAILS = [
-    os.environ.get("ALERT_EMAIL_1", ""),
-    os.environ.get("ALERT_EMAIL_2", ""),
-    os.environ.get("ALERT_EMAIL_3", ""),
-    os.environ.get("ALERT_EMAIL_4", ""),
+# ── Telegram ────────────────────────────────────────────────────────
+TELEGRAM_ENABLED = os.environ.get("NOTIFY_TELEGRAM", "false").lower() == "true"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_IDS = [
+    c.strip()
+    for c in os.environ.get("TELEGRAM_CHAT_IDS", "").split(",")
+    if c.strip()
 ]
+TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+
+# ── Discord ─────────────────────────────────────────────────────────
+DISCORD_ENABLED = os.environ.get("NOTIFY_DISCORD", "false").lower() == "true"
+DISCORD_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+DISCORD_CHANNEL_ID = os.environ.get("DISCORD_CHANNEL_ID", "")
+DISCORD_API = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages"
 
 
-def _send_ntfy(body: str):
-    channel = os.environ.get("NTFY_CHANNEL", "")
-    if not channel:
+def _telegram_send(text: str):
+    """Send to all configured Telegram chat IDs."""
+    if not TELEGRAM_ENABLED or not TELEGRAM_TOKEN or not TELEGRAM_CHAT_IDS:
+        return
+    for chat_id in TELEGRAM_CHAT_IDS:
+        try:
+            resp = requests.post(
+                f"{TELEGRAM_API}/sendMessage",
+                json={"chat_id": chat_id, "text": text[:4096], "parse_mode": "HTML"},
+                timeout=10,
+            )
+            if not resp.ok:
+                print(f"[notifier] Telegram error -> {chat_id}: {resp.status_code} {resp.text[:200]}")
+        except Exception as e:
+            print(f"[notifier] Telegram exception -> {chat_id}: {e}")
+
+
+def _discord_send(text: str):
+    """Send to the configured Discord channel."""
+    if not DISCORD_ENABLED or not DISCORD_TOKEN or not DISCORD_CHANNEL_ID:
         return
     try:
-        requests.post(f"https://ntfy.sh/{channel}", data=body.encode(), timeout=5)
+        resp = requests.post(
+            DISCORD_API,
+            json={"content": text[:2000]},
+            headers={"Authorization": f"Bot {DISCORD_TOKEN}", "Content-Type": "application/json"},
+            timeout=10,
+        )
+        if not resp.ok:
+            print(f"[notifier] Discord error: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
-        print(f"[notifier] ntfy error: {e}")
+        print(f"[notifier] Discord exception: {e}")
 
 
-def _send_email(subject: str, body: str):
-    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-    port = int(os.environ.get("SMTP_PORT", "587"))
-    user = os.environ.get("SMTP_USER", "")
-    password = os.environ.get("SMTP_PASS", "")
-    if not (user and password):
-        print("[notifier] SMTP not configured — skipping email")
-        return
-    for to_addr in EMAILS:
-        if not to_addr:
-            continue
-        try:
-            msg = MIMEText(body)
-            msg["Subject"] = subject
-            msg["From"] = user
-            msg["To"] = to_addr
-            with smtplib.SMTP(host, port) as server:
-                server.starttls()
-                server.login(user, password)
-                server.sendmail(user, to_addr, msg.as_string())
-            print(f"[notifier] email sent -> {to_addr}")
-        except Exception as e:
-            print(f"[notifier] email error -> {to_addr}: {e}")
+# ── Public API ──────────────────────────────────────────────────────
+
+def _ts():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S EST")
 
 
 def notify_alert(raw_alert: str, card_action: str):
-    subject = f"ALERT RECEIVED: {card_action}"
-    body = f"{card_action} alert detected\n{raw_alert}"
-    _send_ntfy(body)
-    _send_email(subject, body)
+    """Called when a new alert is detected (before execution)."""
+    ts = _ts()
+    msg = f"🔔 <b>ALERT RECEIVED — {card_action}</b>\n<code>{raw_alert[:500]}</code>\n<code>{ts}</code>"
+    _telegram_send(msg)
+    _discord_send(msg.replace("<b>", "**").replace("</b>", "**").replace("<code>", "`").replace("</code>", "`"))
 
 
 def notify_execution(msg: str, subject: str = "TRADE EXECUTED"):
-    _send_ntfy(msg)
-    _send_email(subject, msg)
+    """Called after a trade is placed (paper or live)."""
+    ts = _ts()
+    telegram_msg = f"✅ <b>{subject}</b>\n{msg[:3800]}\n<code>{ts}</code>"
+    _telegram_send(telegram_msg)
+    discord_msg = f"✅ **{subject}**\n{msg[:1900]}\n`{ts}`"
+    _discord_send(discord_msg)
 
 
 def notify_error(msg: str):
-    _send_ntfy(msg)
-    _send_email("TRADE ERROR", msg)
+    """Called when something fails (circuit breaker, API error, etc.)."""
+    ts = _ts()
+    telegram_msg = f"🚨 <b>TRADE ERROR</b>\n{msg[:4000]}\n<code>{ts}</code>"
+    _telegram_send(telegram_msg)
+    discord_msg = f"🚨 **TRADE ERROR**\n{msg[:1950]}\n`{ts}`"
+    _discord_send(discord_msg)
+
+
+def notify_correction(ticker: str, trade_line: str):
+    """Called when a revised/corrected alert is detected."""
+    ts = _ts()
+    telegram_msg = f"📝 <b>CORRECTION — {ticker}</b>\n<code>{trade_line[:500]}</code>\n⚠️ No trade executed\n<code>{ts}</code>"
+    _telegram_send(telegram_msg)
+    discord_msg = f"📝 **CORRECTION — {ticker}**\n`{trade_line[:500]}`\n⚠️ No trade executed\n`{ts}`"
+    _discord_send(discord_msg)

@@ -1,17 +1,18 @@
 [Unit]
-Description=DailyProfitsLive Alert Poller
-After=network.target
+Description=Project Nate - DPL Alert Poller (monitors Nate Bear's trades)
+After=network.target trade-webhook.service
+Requires=trade-webhook.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/nate.tps.pro
-EnvironmentFile=/root/nate.tps.pro/.env.trade
+WorkingDirectory=/root/nate.tps.pro/alert-bridge
 ExecStart=/root/nate.tps.pro/.venv/bin/python /root/nate.tps.pro/alert-bridge/alert_poller.py
 Restart=always
 RestartSec=10
-StandardOutput=append:/root/nate.tps.pro/logs/poller.log
-StandardError=append:/root/nate.tps.pro/logs/poller.log
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target

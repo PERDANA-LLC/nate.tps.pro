@@ -23,12 +23,13 @@ ALERT_DIR.mkdir(exist_ok=True)
 
 ALERT_PATTERN = re.compile(
     r"(?P<action>bto|stc)\s+"
+    r"(?:\((?P<quantity>\d+)\)\s+)?"  # optional quantity like "(2)"
     r"(?:(?P<partial>[\d/]+(?:rd'?s?|th)?(?:\s+of)?)\s+)?"
     r"(?P<ticker>[A-Z]+)\s+"
     r"(?P<expiry>\d{1,2}/\d{1,2})\s+"
-    r"\$(?P<strike>\d+(?:\.\d+)?)\s+"
+    r"\$?(?P<strike>\d+(?:\.\d+)?)\s+"
     r"(?P<type>calls?|puts?)"
-    r"(?:\s+(?:@|near)\s*\$?(?P<price>\d+(?:\.\d+)?))?",
+    r"(?:\s+(?:@|near)\s*\$?(?P<price>\d*\.?\d+))?",
     re.IGNORECASE,
 )
 
@@ -56,7 +57,9 @@ def resolve_expiry(raw: str):
     today = datetime.date.today()
     month, day = map(int, raw.split("/"))
     candidate = datetime.date(today.year, month, day)
-    if candidate < today:
+    # Only roll forward if it's more than 30 days in the past
+    # (trades from yesterday or earlier this week stay in current year)
+    if candidate < today - datetime.timedelta(days=30):
         candidate = datetime.date(today.year + 1, month, day)
     return candidate.isoformat(), (candidate - today).days
 
@@ -123,6 +126,7 @@ class AlertHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length))
         raw = body.get("raw_alert", "").strip()
         card_action = body.get("card_action", "")
+        is_correction = body.get("is_correction", False)
 
         today = datetime.date.today().strftime("%Y%m%d")
         with open(ALERT_DIR / f"{today}.jsonl", "a") as f:
@@ -132,6 +136,7 @@ class AlertHandler(BaseHTTPRequestHandler):
                         "timestamp": datetime.datetime.now().isoformat(),
                         "raw": raw,
                         "card_action": card_action,
+                        "is_correction": is_correction,
                     }
                 )
                 + "\n"
@@ -142,6 +147,15 @@ class AlertHandler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.end_headers()
             self.wfile.write(b'{"error":"parse_failed"}')
+            return
+
+        if is_correction:
+            # Correction: log + notify, but do NOT execute
+            from notifier import notify_correction
+            notify_correction(parsed.ticker, raw)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "correction_logged", "parsed": asdict(parsed)}).encode())
             return
 
         notify_alert(raw, card_action)

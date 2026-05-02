@@ -25,8 +25,30 @@ LOG_FILE = BASE_DIR / "trade-log" / "trades.csv"
 LOG_FILE.parent.mkdir(exist_ok=True)
 PAPER_TRADE = os.environ.get("PAPER_TRADE", "true").lower() == "true"
 
-TARGET_TRADE_SIZE_USD = 1000
-MAX_DAILY_TRADES = 5
+# ── Risk & sizing from env ──────────────────────────────────────────
+TARGET_TRADE_SIZE_USD = int(os.environ.get("MAX_DOLLAR_PER_TRADE", "1000"))
+MAX_DAILY_TRADES = int(os.environ.get("MAX_DAILY_TRADES", "5"))
+MAX_CONTRACTS_PER_TRADE = int(os.environ.get("MAX_CONTRACTS_PER_TRADE", "0"))
+RISK_MODE = os.environ.get("RISK_LIMIT_MODE", "contracts")  # "contracts" or "dollars"
+
+
+def get_account_hash() -> str:
+    """Resolve the active trading account from named accounts."""
+    account_name = os.environ.get("TRADING_ACCOUNT", "")
+    if account_name and account_name in os.environ:
+        return os.environ[account_name]
+    # fallback: explicit hash
+    return os.environ.get("SCHWAB_ACCOUNT_HASH", "")
+
+
+def cap_quantity(qty: int) -> int:
+    """Apply contract cap if RISK_LIMIT_MODE is 'contracts' and MAX_CONTRACTS_PER_TRADE > 0."""
+    if RISK_MODE == "contracts" and MAX_CONTRACTS_PER_TRADE > 0:
+        capped = min(qty, MAX_CONTRACTS_PER_TRADE)
+        if capped < qty:
+            print(f"[executor] Contract cap: {qty} → {capped} (max {MAX_CONTRACTS_PER_TRADE})")
+        return capped
+    return qty
 
 
 def count_todays_bto() -> int:
@@ -142,7 +164,10 @@ def execute_via_api(analysis: dict, qty: int) -> bool:
             api_key=os.environ["SCHWAB_CLIENT_ID"],
             app_secret=os.environ["SCHWAB_CLIENT_SECRET"],
         )
-        account_hash = os.environ["SCHWAB_ACCOUNT_HASH"]
+        account_hash = get_account_hash()
+        if not account_hash:
+            print("[executor] No account hash configured — cannot trade")
+            return False
 
         ticker = analysis["ticker"]
         action = analysis["action"]
@@ -362,6 +387,7 @@ def main():
 
     if action == "BTO":
         qty = calculate_quantity(limit_price) if limit_price else 1
+        qty = cap_quantity(qty)
         total_cost = position_cost_usd(limit_price, qty) if limit_price else 0
         analysis["quantity"] = qty
         print(
@@ -376,6 +402,7 @@ def main():
             expiry=analysis.get("expiry_date", ""),
         )
         qty = resolve_partial_qty(bto_qty, partial_close) if partial_close else bto_qty
+        qty = cap_quantity(qty)
         analysis["quantity"] = qty
         label = f"partial {partial_close} -> " if partial_close else ""
         print(f"[executor] STC sizing: {label}closing {qty}/{bto_qty} contracts")
