@@ -152,6 +152,96 @@ def log_trade(
         )
 
 
+def poll_order_status(client, account_hash: str, order_id: str,
+                      max_polls: int = 6, interval: int = 5) -> dict:
+    """Poll Schwab for order fill status. Returns {status, fill_price, fill_qty}."""
+    for i in range(max_polls):
+        time.sleep(interval)
+        try:
+            resp = client.get_order(account_hash, order_id)
+            if not resp.ok:
+                print(f"[executor] Order poll {i+1}/{max_polls}: HTTP {resp.status_code}")
+                continue
+            order_data = resp.json()
+            status = order_data.get("status", "UNKNOWN")
+            print(f"[executor] Order poll {i+1}/{max_polls}: {status}")
+            if status in ("FILLED", "PARTIAL_FILL", "REJECTED", "CANCELED", "EXPIRED"):
+                legs = order_data.get("orderLegCollection", [{}])
+                leg = legs[0] if legs else {}
+                fills = order_data.get("orderActivityCollection", [])
+                avg_price = None
+                fill_qty = 0
+                for a in fills:
+                    if a.get("activityType") in ("FILL", "PARTIAL_FILL"):
+                        fp = a.get("fillPrice")
+                        fq = a.get("fillQuantity", 0)
+                        if fp:
+                            avg_price = fp
+                        fill_qty += fq
+                return {
+                    "status": status,
+                    "fill_price": avg_price or leg.get("price"),
+                    "fill_qty": fill_qty or leg.get("filledQuantity", 0),
+                    "order_data": order_data,
+                }
+        except Exception as e:
+            print(f"[executor] Order poll {i+1}/{max_polls} error: {e}")
+    return {"status": "WORKING", "fill_price": None, "fill_qty": 0}
+
+
+def notify_fill(analysis: dict, qty: int, order_id: str, fill_status: str,
+                fill_price=None, fill_qty: int = 0):
+    """Send fill/cancel/reject notification to Telegram + Discord."""
+    ticker = analysis["ticker"]
+    action = analysis["action"]
+    strike = int(analysis.get("strike", 0))
+    opt_char = "C" if analysis.get("option_type") == "CALL" else "P"
+    expiry = analysis.get("expiry_date", "")
+    opt_info = f"{ticker} {strike}{opt_char} EXP {expiry}"
+
+    if fill_status == "FILLED":
+        price_str = f" @${fill_price:.2f}" if fill_price else ""
+        msg = (
+            f"ORDER FILLED: {action} {opt_info}{price_str}"
+            f" x{fill_qty or qty} contracts"
+            + (f" (~${(fill_price or 0) * 100 * (fill_qty or qty):.0f})" if fill_price else "")
+            + f"\nID: {order_id}"
+        )
+        notify_execution(msg, subject=f"FILLED: {action} {ticker}")
+        log_trade(analysis, "FILLED", order_id=order_id, fill_price=fill_price,
+                  qty=fill_qty or qty, notes=f"polled_fill")
+    elif fill_status == "PARTIAL_FILL":
+        msg = (
+            f"PARTIAL FILL: {action} {opt_info}"
+            f" x{fill_qty}/{qty} contracts"
+            + (f" @${fill_price:.2f}" if fill_price else "")
+            + f"\nID: {order_id}\n⚠️ {qty - (fill_qty or 0)} contracts still working"
+        )
+        notify_execution(msg, subject=f"PARTIAL FILL: {action} {ticker}")
+        log_trade(analysis, "PARTIAL_FILL", order_id=order_id, fill_price=fill_price,
+                  qty=fill_qty or qty, notes=f"partial {fill_qty}/{qty}")
+    elif fill_status == "REJECTED":
+        msg = (
+            f"ORDER REJECTED: {action} {opt_info} x{qty} contracts\n"
+            f"ID: {order_id}\n🚨 Schwab rejected this order — check manually."
+        )
+        notify_error(msg)
+        log_trade(analysis, "REJECTED", order_id=order_id, qty=qty, notes="rejected_by_schwab")
+    elif fill_status in ("CANCELED", "EXPIRED"):
+        msg = (
+            f"ORDER {fill_status}: {action} {opt_info} x{qty} contracts\n"
+            f"ID: {order_id}"
+        )
+        notify_error(msg)
+        log_trade(analysis, fill_status, order_id=order_id, qty=qty)
+    else:
+        msg = (
+            f"ORDER WORKING: {action} {opt_info} x{qty} contracts\n"
+            f"ID: {order_id}\n⏳ Still open after 30s — check Schwab."
+        )
+        notify_execution(msg, subject=f"WORKING: {action} {ticker}")
+
+
 def execute_via_api(analysis: dict, qty: int) -> bool:
     """Path A: Schwab Individual Trader API."""
     try:
@@ -218,6 +308,13 @@ def execute_via_api(analysis: dict, qty: int) -> bool:
             subject=f"ORDER PLACED: {action} {ticker}",
         )
         print(f"[executor] API order placed. ID: {order_id} | qty={qty} | cost~${total_cost:.0f}")
+
+        # Poll for fill status
+        print(f"[executor] Polling order status for {order_id}...")
+        fill = poll_order_status(client, account_hash, order_id)
+        notify_fill(analysis, qty, order_id, fill["status"],
+                    fill_price=fill.get("fill_price"),
+                    fill_qty=fill.get("fill_qty", 0))
         return True
 
     except Exception as e:
@@ -417,7 +514,18 @@ def main():
             f" EXP {analysis.get('expiry_date', '')}"
             + (f" @{limit_price}" if limit_price else " MKT")
             + f" x{qty} contracts (~${total_cost:.0f})",
-            subject=f"[PAPER] {action} {ticker}",
+            subject=f"[PAPER] ORDER PLACED: {action} {ticker}",
+        )
+        # Simulate fill after brief delay
+        time.sleep(2)
+        notify_execution(
+            f"[PAPER] FILLED: {action} {ticker} "
+            f"{int(analysis.get('strike', 0))}"
+            f"{'C' if analysis.get('option_type') == 'CALL' else 'P'}"
+            f" EXP {analysis.get('expiry_date', '')}"
+            + (f" @{limit_price}" if limit_price else " MKT")
+            + f" x{qty} contracts (~${total_cost:.0f})",
+            subject=f"[PAPER] FILLED: {action} {ticker}",
         )
         print(f"[executor] PAPER TRADE logged: {ticker} {action} x{qty}")
         return
