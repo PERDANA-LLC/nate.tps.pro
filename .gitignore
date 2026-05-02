@@ -26,4 +26,4 @@ schwab_tokens.json
 # Data / logs
 *.log
 data/
-logs/
+logs/.env.trade

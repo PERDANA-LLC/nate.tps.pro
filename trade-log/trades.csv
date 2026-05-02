@@ -1,0 +1,3 @@
+timestamp,raw_alert,action,ticker,option_type,strike,expiry,limit_price,order_id,fill_price,execution_status,notes
+2026-05-02T15:07:46.512566,BTO FSLY 26C EXP 2026-04-17,BTO,FSLY,CALL,26,2026-04-17,0.15,,,PAPER_TRADE,qty=67
+2026-05-02T15:07:59.146258,STC FSLY 26C EXP 2026-04-17,STC,FSLY,CALL,26,2026-04-17,0.5,,,PAPER_TRADE,qty=67

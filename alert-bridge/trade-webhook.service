@@ -1,0 +1,17 @@
+[Unit]
+Description=Trade Alert Webhook Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/nate.tps.pro
+EnvironmentFile=/root/nate.tps.pro/.env.trade
+ExecStart=/root/nate.tps.pro/.venv/bin/python /root/nate.tps.pro/alert-bridge/webhook_server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/root/nate.tps.pro/logs/webhook.log
+StandardError=append:/root/nate.tps.pro/logs/webhook.log
+
+[Install]
+WantedBy=multi-user.target
