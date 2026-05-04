@@ -8,13 +8,14 @@ import json
 import re
 import datetime
 import subprocess
+import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path.home() / ".hermes" / "shared"))
 from notifier import notify_alert
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -111,6 +112,24 @@ def parse_alert(text: str, card_action: str = "") -> Optional[ParsedAlert]:
     return None
 
 
+def _process_correction(parsed, raw: str):
+    """Background: notify about correction — no execution."""
+    from notifier import notify_correction
+    notify_correction(parsed.ticker, raw)
+
+
+def _process_alert(parsed, raw: str, card_action: str):
+    """Background: notify + spawn executor. Never blocks the HTTP response."""
+    notify_alert(raw, card_action)
+    subprocess.Popen(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parent / "schwab_executor.py"),
+            json.dumps(asdict(parsed)),
+        ]
+    )
+
+
 class AlertHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
@@ -127,6 +146,7 @@ class AlertHandler(BaseHTTPRequestHandler):
         raw = body.get("raw_alert", "").strip()
         card_action = body.get("card_action", "")
         is_correction = body.get("is_correction", False)
+        trade_date = body.get("trade_date", "")
 
         today = datetime.date.today().strftime("%Y%m%d")
         with open(ALERT_DIR / f"{today}.jsonl", "a") as f:
@@ -137,6 +157,7 @@ class AlertHandler(BaseHTTPRequestHandler):
                         "raw": raw,
                         "card_action": card_action,
                         "is_correction": is_correction,
+                        "trade_date": trade_date,
                     }
                 )
                 + "\n"
@@ -149,28 +170,25 @@ class AlertHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":"parse_failed"}')
             return
 
-        if is_correction:
-            # Correction: log + notify, but do NOT execute
-            from notifier import notify_correction
-            notify_correction(parsed.ticker, raw)
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "correction_logged", "parsed": asdict(parsed)}).encode())
-            return
-
-        notify_alert(raw, card_action)
-
-        subprocess.Popen(
-            [
-                sys.executable,
-                str(Path(__file__).resolve().parent / "schwab_executor.py"),
-                json.dumps(asdict(parsed)),
-            ]
-        )
-
+        # ── Respond INSTANTLY — poller has a 5s timeout ──
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(json.dumps({"status": "queued", "parsed": asdict(parsed)}).encode())
+        try:
+            self.wfile.write(json.dumps({"status": "received", "parsed": asdict(parsed)}).encode())
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        self.close_connection = True  # Close socket when do_POST returns
+
+        # ── Heavy work runs in background — NEVER block the response ──
+        if is_correction:
+            threading.Thread(
+                target=_process_correction, args=(parsed, raw), daemon=True
+            ).start()
+        else:
+            threading.Thread(
+                target=_process_alert, args=(parsed, raw, card_action), daemon=True
+            ).start()
 
     def log_message(self, *args):
         pass

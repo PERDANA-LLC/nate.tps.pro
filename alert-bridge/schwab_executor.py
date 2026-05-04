@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path.home() / ".hermes" / "shared"))
 from notifier import notify_execution, notify_error
 
 BASE_DIR = Path(__file__).resolve().parent.parent

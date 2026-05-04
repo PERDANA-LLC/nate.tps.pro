@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJ = Path(__file__).resolve().parent
-sys.path.insert(0, str(PROJ / "alert-bridge"))
+sys.path.insert(0, str(Path.home() / ".hermes" / "shared"))
 from notifier import _telegram_send, _discord_send, _ts
 
 REFRESH_WINDOW_DAYS = 7

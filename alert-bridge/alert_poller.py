@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env.trade")
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path.home() / ".hermes" / "shared"))
 from notifier import _telegram_send, _discord_send
 
 # ── Config ──────────────────────────────────────────────────────────
@@ -46,7 +46,10 @@ BROWSER_ARGS = [
 
 # CSS classes for color detection
 GREEN_CLASSES = ["bg-green-400", "bg-green-700", "bg-emerald-400", "bg-emerald-700"]
-RED_CLASSES = ["bg-red-400", "bg-red-700", "bg-rose-400", "bg-rose-700"]
+RED_CLASSES   = ["bg-red-400",   "bg-red-700",   "bg-rose-400",   "bg-rose-700"]
+BLUE_CLASSES  = ["bg-blue-400",  "bg-blue-500",  "bg-blue-600",  "bg-blue-700",
+                 "bg-sky-400",   "bg-sky-500",   "bg-sky-600",   "bg-sky-700",
+                 "bg-cyan-400",  "bg-cyan-500",  "bg-cyan-600",  "bg-cyan-700"]
 
 
 def load_seen() -> set:
@@ -64,13 +67,17 @@ def alert_hash(text: str) -> str:
 
 
 def detect_action(class_str: str) -> str | None:
-    """Check CSS classes for green=BTO, red=STC."""
+    """Check CSS classes for green=BTO, red=STC, blue=BLUE_CARD (INFO ONLY)."""
     for g in GREEN_CLASSES:
         if g in class_str:
             return "BTO"
     for r in RED_CLASSES:
         if r in class_str:
             return "STC"
+    # ⛔ BLUE_CARD = informational only — never forwarded to webhook/executor
+    for b in BLUE_CLASSES:
+        if b in class_str:
+            return "BLUE_CARD"
     return None
 
 
@@ -91,10 +98,28 @@ def extract_trade_line(card_text: str) -> str | None:
     return None
 
 
+_EXPIRY_RE = re.compile(r"(\d{1,2})/(\d{1,2})\s+\$?\d+")
+
+
+def is_option_expired(trade_line: str) -> bool:
+    """Check if the option expiry in a trade line is before today."""
+    m = _EXPIRY_RE.search(trade_line)
+    if not m:
+        return False
+    month, day = int(m.group(1)), int(m.group(2))
+    today = datetime.date.today()
+    candidate = datetime.date(today.year, month, day)
+    # If the date is more than 7 days in the past within the same year,
+    # it's truly expired (not a trade from earlier this week)
+    if candidate < today - datetime.timedelta(days=1):
+        return True
+    return False
+
+
 def scrape_trades(page) -> list[dict]:
     """
-    Navigate to DPL, click Trades tab, extract all trade cards.
-    Returns list of {raw, card_action}.
+    Navigate to DPL, click Trades tab, extract all trade cards + date.
+    Returns list of {raw, card_action, trade_date}.
     """
     # Navigate to DPL
     page.goto(DPL_URL, wait_until="domcontentloaded", timeout=15000)
@@ -109,6 +134,68 @@ def scrape_trades(page) -> list[dict]:
     except Exception:
         pass
 
+    # ── Extract date from Trades tab header ────────────────────
+    trade_date = None
+    today_str = datetime.date.today().strftime("%B %d, %Y")
+    month_names = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ]
+
+    def looks_like_date(text: str) -> bool:
+        """Check if text resembles a date: contains a month name or 'Today'."""
+        t = text.strip().lower()
+        if t == "today":
+            return True
+        for month in month_names:
+            if month.lower() in t:
+                return True
+        # Also match numeric dates like "5/4/2026" or "2026-05-04"
+        import re as _re
+        if _re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', t):
+            return True
+        return False
+
+    try:
+        # Try common date header patterns in the Trades tab
+        for sel in [
+            "h2", "h3",
+            "[class*='date']", "[class*='Date']",
+            "[class*='header'] h2", "[class*='header'] h3",
+        ]:
+            el = page.query_selector(sel)
+            if el:
+                text = el.inner_text().strip()
+                if text and len(text) < 60 and looks_like_date(text):
+                    trade_date = text if text.lower() != "today" else "Today"
+                    break
+
+        # Explicitly check for "Today" text if no date found
+        if not trade_date:
+            today_el = page.query_selector("text='Today'") or page.query_selector("text=Today")
+            if today_el:
+                trade_date = "Today"
+    except Exception:
+        pass
+
+    # Verify date matches system date
+    if trade_date:
+        # "Today" always matches
+        if trade_date.lower() != "today" and trade_date != today_str:
+            mismatch_msg = (
+                f"⚠️ <b>DATE MISMATCH</b>\n"
+                f"DPL Trades tab shows: <b>{trade_date}</b>\n"
+                f"System date is: <b>{today_str}</b>\n"
+                f"The scraper may be reading stale data."
+            )
+            _telegram_send(mismatch_msg)
+            _discord_send(mismatch_msg.replace("<b>", "**").replace("</b>", "**"))
+            print(f"[{datetime.datetime.now()}] ⚠️ DATE MISMATCH: page={trade_date} system={today_str}")
+    else:
+        # No date found on page — warn but continue
+        trade_date = "Unknown"
+        print(f"[{datetime.datetime.now()}] ⚠️ No date header found on Trades tab")
+
     results = []
 
     # Find all trade cards by CSS class
@@ -117,6 +204,9 @@ def scrape_trades(page) -> list[dict]:
         "[class*='bg-red-']",
         "[class*='bg-emerald-']",
         "[class*='bg-rose-']",
+        "[class*='bg-blue-']",
+        "[class*='bg-sky-']",
+        "[class*='bg-cyan-']",
     ]:
         cards = page.query_selector_all(selector)
         if not cards:
@@ -149,6 +239,7 @@ def scrape_trades(page) -> list[dict]:
                     "raw": trade_line,
                     "card_action": action,
                     "is_correction": is_correction,
+                    "trade_date": trade_date,
                 })
             except Exception:
                 continue
@@ -176,12 +267,35 @@ def notify_status(msg: str):
     _discord_send(full.replace("<b>", "**").replace("</b>", "**"))
 
 
+def notify_trade_date(date_label: str):
+    """Send today's trade date to Telegram + Discord."""
+    if date_label == "Unknown":
+        msg = "📅 <b>Trades detected — date header not found on page</b>"
+    else:
+        msg = f"📅 <b>Trades for {date_label}</b>"
+    _telegram_send(msg)
+    _discord_send(msg.replace("<b>", "**").replace("</b>", "**"))
+
+
+def notify_blue_card(raw_alert: str, trade_date: str):
+    """Send blue card alert to Telegram + Discord. INFO ONLY — never executes."""
+    msg = (
+        f"🔵 <b>BLUE CARD — INFO ONLY</b>\n"
+        f"Date: {trade_date}\n"
+        f"<code>{raw_alert[:500]}</code>\n"
+        f"⛔ DO NOT EXECUTE — informational card only"
+    )
+    _telegram_send(msg)
+    _discord_send(msg.replace("<b>", "**").replace("</b>", "**").replace("<code>", "`").replace("</code>", "`"))
+
+
 def main():
     if not DPL_USER or not DPL_PASS:
         print("[poller] FATAL: FEED_USER / FEED_PASS not set")
         sys.exit(1)
 
     seen = load_seen()
+    last_notified_date = None  # Track date for once-per-day notifications
     print(f"[{datetime.datetime.now()}] Poller starting")
     print(f"[{datetime.datetime.now()}] DPL: {DPL_URL}")
     print(f"[{datetime.datetime.now()}] Interval: {POLL_INTERVAL}s")
@@ -251,13 +365,36 @@ def main():
                     raw = alert["raw"]
                     card_action = alert["card_action"]
                     is_correction = alert.get("is_correction", False)
-                    h = alert_hash(raw)
-                    if h not in seen or is_correction:
+                    trade_date = alert.get("trade_date", "")
+
+                    # ⛔ Skip expired options — stale cards stuck on DPL page
+                    if is_option_expired(raw):
+                        print(f"[{datetime.datetime.now()}] ⏰ EXPIRED (skipped) | {raw[:100]}")
+                        continue
+
+                    # Notify once per day when we see a new trade date
+                    if trade_date and trade_date != last_notified_date:
+                        notify_trade_date(trade_date)
+                        last_notified_date = trade_date
+                        print(f"[{datetime.datetime.now()}] 📅 Date: {trade_date}")
+
+                    # ⛔ BLUE CARDS: notify Telegram+Discord, NEVER forward to webhook/executor ⛔
+                    if card_action == "BLUE_CARD":
+                        h = alert_hash(raw)
                         if h not in seen:
                             seen.add(h)
+                            save_seen(seen)
+                            notify_blue_card(raw, trade_date)
+                            print(f"[{datetime.datetime.now()}] 🔵 BLUE CARD (no-exec) | {trade_date}: {raw[:100]}")
+                        continue  # <-- HARD GUARD: skips webhook POST below
+
+                    h = alert_hash(raw)
+                    if h not in seen:
+                        seen.add(h)
                         save_seen(seen)
                         label = f"CORRECTED [{card_action}]" if is_correction else f"NEW [{card_action}]"
-                        print(f"[{datetime.datetime.now()}] 🚨 {label}: {raw[:100]}")
+                        print(f"[{datetime.datetime.now()}] 🚨 {label} | {trade_date}: {raw[:100]}")
+                        # ⛔ BLUE_CARD already filtered above — only BTO/STC reach here ⛔
                         try:
                             resp = requests.post(
                                 LOCAL_WEBHOOK,
@@ -265,6 +402,7 @@ def main():
                                     "raw_alert": raw,
                                     "card_action": card_action,
                                     "is_correction": is_correction,
+                                    "trade_date": trade_date,
                                 },
                                 timeout=5,
                             )
