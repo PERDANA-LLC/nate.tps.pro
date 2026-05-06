@@ -17,6 +17,7 @@ import datetime
 import requests
 import os
 import sys
+import socket
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
@@ -38,6 +39,23 @@ SEEN_FILE = BASE_DIR / "trade-log" / "seen_hashes.txt"
 SESSION_FILE = BASE_DIR / "schwab-auth" / "feed_session.json"
 SEEN_FILE.parent.mkdir(exist_ok=True)
 SESSION_FILE.parent.mkdir(exist_ok=True)
+
+
+def sd_notify(state: str) -> bool:
+    """Send a watchdog ping to systemd. No-op outside systemd."""
+    sock_path = os.environ.get("NOTIFY_SOCKET", "")
+    if not sock_path:
+        return False
+    if sock_path.startswith("@"):
+        sock_path = "\0" + sock_path[1:]
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        sock.sendto(state.encode(), sock_path)
+        sock.close()
+        return True
+    except Exception:
+        return False
+
 
 BROWSER_ARGS = [
     "--no-sandbox", "--disable-gpu",
@@ -123,6 +141,8 @@ def scrape_trades(page) -> list[dict]:
     """
     # Navigate to DPL
     page.goto(DPL_URL, wait_until="domcontentloaded", timeout=15000)
+    page.set_default_timeout(30000)  # 30s max for any DOM op
+    page.set_default_navigation_timeout(30000)
     time.sleep(3)
 
     # Click Trades tab (page defaults to Chat)
@@ -136,7 +156,18 @@ def scrape_trades(page) -> list[dict]:
 
     # ── Extract date from Trades tab header ────────────────────
     trade_date = None
-    today_str = datetime.date.today().strftime("%B %d, %Y")
+    today = datetime.date.today()
+    # DPL shows dates like "May 5" — no year, no zero-padding
+    # Generate all reasonable formats for comparison
+    today_variants = {
+        today.strftime("%B %-d"),            # "May 5"
+        today.strftime("%B %d"),             # "May 05"
+        today.strftime("%-m/%-d"),           # "5/5"
+        today.strftime("%m/%d"),             # "05/05"
+        today.strftime("%B %-d, %Y"),        # "May 5, 2026"
+        today.strftime("%B %d, %Y"),         # "May 05, 2026"
+        "Today", "today",
+    }
     month_names = [
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December"
@@ -181,82 +212,132 @@ def scrape_trades(page) -> list[dict]:
     # Verify date matches system date
     if trade_date:
         # "Today" always matches
-        if trade_date.lower() != "today" and trade_date != today_str:
+        if trade_date.lower() != "today" and trade_date not in today_variants:
             mismatch_msg = (
                 f"⚠️ <b>DATE MISMATCH</b>\n"
                 f"DPL Trades tab shows: <b>{trade_date}</b>\n"
-                f"System date is: <b>{today_str}</b>\n"
+                f"System date is: <b>{today.strftime('%B %-d, %Y')}</b>\n"
                 f"The scraper may be reading stale data."
             )
             _telegram_send(mismatch_msg)
             _discord_send(mismatch_msg.replace("<b>", "**").replace("</b>", "**"))
-            print(f"[{datetime.datetime.now()}] ⚠️ DATE MISMATCH: page={trade_date} system={today_str}")
+            print(f"[{datetime.datetime.now()}] ⚠️ DATE MISMATCH: page={trade_date} system={today.strftime('%B %-d, %Y')}")
     else:
         # No date found on page — warn but continue
         trade_date = "Unknown"
         print(f"[{datetime.datetime.now()}] ⚠️ No date header found on Trades tab")
 
+    # ── Force lazy-rendered cards into the DOM by scrolling ──────────
+    # DPL uses a fixed-height viewport with an inner scrollable container
+    # (div.flex overflow-y-scroll). Scrolling document.body does nothing.
+    # Find the scrollable trade feed container and scroll it to bottom.
+    scroll_container = page.evaluate("""() => {
+        const candidates = document.querySelectorAll('[class*="overflow-y-scroll"], [class*="overflow-y-auto"]');
+        for (const el of candidates) {
+            if (el.scrollHeight > el.clientHeight + 50) return true;
+        }
+        return false;
+    }""")
+
+    if scroll_container:
+        # Scroll the inner feed container to bottom, then back to top
+        page.evaluate("""() => {
+            const el = document.querySelector('[class*="overflow-y-scroll"], [class*="overflow-y-auto"]');
+            if (el && el.scrollHeight > el.clientHeight + 50) {
+                el.scrollTop = el.scrollHeight;
+            }
+        }""")
+        time.sleep(1)
+        page.evaluate("""() => {
+            const el = document.querySelector('[class*="overflow-y-scroll"], [class*="overflow-y-auto"]');
+            if (el) el.scrollTop = 0;
+        }""")
+        time.sleep(0.3)
+    else:
+        # Fallback: try body scrolling (unlikely to help on DPL)
+        for _ in range(5):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(0.3)
+
     results = []
 
-    # Find all trade cards by CSS class
-    for selector in [
-        "[class*='bg-green-']",
-        "[class*='bg-red-']",
-        "[class*='bg-emerald-']",
-        "[class*='bg-rose-']",
-        "[class*='bg-blue-']",
-        "[class*='bg-sky-']",
-        "[class*='bg-cyan-']",
-    ]:
-        cards = page.query_selector_all(selector)
-        if not cards:
-            continue
+    # Find ALL trade cards in one combined query — green, red, AND blue
+    cards = page.query_selector_all(
+        "[class*='bg-green-'], [class*='bg-red-'], "
+        "[class*='bg-emerald-'], [class*='bg-rose-'], "
+        "[class*='bg-blue-'], [class*='bg-sky-'], [class*='bg-cyan-']"
+    )
 
-        for card in cards:
-            try:
-                class_str = card.get_attribute("class") or ""
-                action = detect_action(class_str)
-                if not action:
-                    continue
+    # ── Find today's starting marker: the first BLUE_CARD ────────────
+    # DPL structure: "May 5" date label → blue card → today's trades.
+    # Only process cards from the blue card onward; skip stale cards above.
+    today_start = 0
+    for idx, card in enumerate(cards):
+        cls = card.get_attribute("class") or ""
+        if any(b in cls for b in BLUE_CLASSES):
+            today_start = idx
+            break
 
-                card_text = card.inner_text().strip()
-                trade_line = extract_trade_line(card_text)
-                if not trade_line:
-                    continue
-
-                # Check for correction indicators
-                text_lower = card_text.lower()
-                is_revised = "revised" in text_lower
-                is_correction = is_revised or any(
-                    kw in text_lower for kw in [
-                        "correction:", "corrected:", "update:", "updated:",
-                        "amended:", "modified:", "changed:", "edited:",
-                        "revision:", "adjustment:", "adjusted:",
-                    ]
-                )
-
-                results.append({
-                    "raw": trade_line,
-                    "card_action": action,
-                    "is_correction": is_correction,
-                    "trade_date": trade_date,
-                })
-            except Exception:
+    for card in cards[:today_start + 1]:  # include blue card itself
+        try:
+            class_str = card.get_attribute("class") or ""
+            action = detect_action(class_str)
+            if not action:
                 continue
 
-        if results:
-            break
+            card_text = card.inner_text().strip()
+            trade_line = extract_trade_line(card_text)
+
+            # BLUE_CARD: has no bto/stc line — use first meaningful text line
+            if action == "BLUE_CARD":
+                if not trade_line:
+                    lines = [l.strip() for l in card_text.split("\n") if l.strip()]
+                    trade_line = lines[0] if lines else card_text[:100]
+            elif not trade_line:
+                continue  # Green/red cards MUST have bto/stc line
+
+            # Check for correction indicators
+            text_lower = card_text.lower()
+            is_revised = "revised" in text_lower
+            is_correction = is_revised or any(
+                kw in text_lower for kw in [
+                    "correction:", "corrected:", "update:", "updated:",
+                    "amended:", "modified:", "changed:", "edited:",
+                    "revision:", "adjustment:", "adjusted:",
+                ]
+            )
+
+            results.append({
+                "raw": trade_line,
+                "card_action": action,
+                "is_correction": is_correction,
+                "trade_date": trade_date,
+            })
+        except Exception:
+            continue
 
     return results
 
 
 def is_market_hours() -> bool:
-    """Mon-Fri, 9:00am-5:00pm EST (14:00-22:00 UTC)."""
-    now = datetime.datetime.utcnow()
-    if now.weekday() >= 5:
+    """Mon-Fri, 9:00am-5:00pm Eastern (auto-DST: 13-21 UTC EDT, 14-22 UTC EST)."""
+    try:
+        from zoneinfo import ZoneInfo
+        eastern = datetime.datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        # Fallback: check DST via localtime
+        import time as _time
+        is_dst = _time.localtime().tm_isdst == 1
+        offset = 4 if is_dst else 5  # EDT=-4, EST=-5
+        now_utc = datetime.datetime.utcnow()
+        hour = (now_utc.hour - offset + 24) % 24 + now_utc.minute / 60.0
+        if now_utc.weekday() >= 5:
+            return False
+        return 9.5 <= hour <= 16.0
+    if eastern.weekday() >= 5:
         return False
-    hour = now.hour + now.minute / 60.0
-    return 14.0 <= hour <= 22.0
+    hour = eastern.hour + eastern.minute / 60.0
+    return 9.5 <= hour <= 16.0
 
 
 def notify_status(msg: str):
@@ -287,6 +368,37 @@ def notify_blue_card(raw_alert: str, trade_date: str):
     )
     _telegram_send(msg)
     _discord_send(msg.replace("<b>", "**").replace("</b>", "**").replace("<code>", "`").replace("</code>", "`"))
+
+
+def capture_opening_balance():
+    """Fetch Schwab cash balance at market open and save as daily budget basis."""
+    try:
+        token_file = BASE_DIR / "schwab-auth" / "token.json"
+        if not token_file.exists():
+            print("[poller] ⚠️ No token.json — can't capture opening balance")
+            return
+        with open(token_file) as f:
+            t = json.load(f)
+        h = os.environ.get("JOINT_TONA", "")
+        if not h:
+            print("[poller] ⚠️ JOINT_TONA not set")
+            return
+        r = requests.get(
+            f"https://api.schwabapi.com/trader/v1/accounts/{h}",
+            params={"fields": "positions"},
+            headers={"Authorization": f"Bearer {t['access_token']}"},
+            timeout=10)
+        if r.ok:
+            cash = float(r.json()["securitiesAccount"]["currentBalances"]["cashBalance"])
+            budget = round(cash * float(os.environ.get("DAILY_BUDGET_PCT", "0.5")), 2)
+            bal_file = BASE_DIR / "trade-log" / "opening_balance.txt"
+            bal_file.parent.mkdir(exist_ok=True)
+            bal_file.write_text(f"{cash}\n{budget}\n")
+            print(f"[poller] 💰 Opening balance: ${cash:,.2f} → budget: ${budget:,.2f}")
+        else:
+            print(f"[poller] ⚠️ Opening balance fetch failed: {r.status_code}")
+    except Exception as e:
+        print(f"[poller] ⚠️ Opening balance error: {e}")
 
 
 def main():
@@ -338,28 +450,36 @@ def main():
 
         # ── Startup notification ─────────────────────────────────────
         in_hours = is_market_hours()
-        notify_status("🟢 Service started" + (" — monitoring" if in_hours else " — waiting for 9am EST"))
+        if in_hours:
+            notify_status("🟢 Service started — monitoring")
+        else:
+            print(f"[{datetime.datetime.now()}] Poller started — waiting for market hours")
+        # outside-hours startup is silent (no push notification)
 
         # ── Poll loop ───────────────────────────────────────────────
+        first_scrape = True  # suppress blue cards on initial scrape (stale cards from prior days)
         while True:
             try:
                 now_in_hours = is_market_hours()
 
                 # Market hours transition detection
                 if now_in_hours and not in_hours:
-                    notify_status("🟢 Market open — monitoring DPL trades")
+                    notify_status("🟢 Market open at 9:30 AM EST — monitoring DPL trades")
+                    capture_opening_balance()
                 elif in_hours and not now_in_hours:
-                    notify_status("🔴 Market closed — see you tomorrow")
+                    notify_status("🔴 Market closed at 4:00 PM EST — see you tomorrow")
 
                 in_hours = now_in_hours
 
                 if not now_in_hours:
+                    sd_notify("WATCHDOG=1")  # ping: alive, just waiting
                     time.sleep(POLL_INTERVAL)
                     continue
 
                 page = context.new_page()
                 alerts = scrape_trades(page)
                 page.close()
+                sd_notify("WATCHDOG=1")  # ping systemd: poll cycle completed successfully
 
                 for alert in alerts:
                     raw = alert["raw"]
@@ -384,8 +504,11 @@ def main():
                         if h not in seen:
                             seen.add(h)
                             save_seen(seen)
-                            notify_blue_card(raw, trade_date)
-                            print(f"[{datetime.datetime.now()}] 🔵 BLUE CARD (no-exec) | {trade_date}: {raw[:100]}")
+                            if not first_scrape:
+                                notify_blue_card(raw, trade_date)
+                                print(f"[{datetime.datetime.now()}] 🔵 BLUE CARD (no-exec) | {trade_date}: {raw[:100]}")
+                            else:
+                                print(f"[{datetime.datetime.now()}] 🔵 BLUE CARD (silent seed) | {trade_date}: {raw[:100]}")
                         continue  # <-- HARD GUARD: skips webhook POST below
 
                     h = alert_hash(raw)
@@ -412,7 +535,9 @@ def main():
 
             except Exception as e:
                 print(f"[{datetime.datetime.now()}] Poll error: {e}")
+                sd_notify("WATCHDOG=1")  # ping: alive despite error — don't kill me
 
+            first_scrape = False
             time.sleep(POLL_INTERVAL)
 
 

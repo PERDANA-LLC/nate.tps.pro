@@ -31,3 +31,11 @@ schwab-auth/
 *.log
 data/
 logs/.env.trade
+
+# Trade data / tokens (sensitive)
+trade-log/*.csv
+trade-log/*.jsonl
+trade-log/*.txt
+trade-log/*.bak
+tokens/schwab_tokens.db
+tokens/playwright_session/

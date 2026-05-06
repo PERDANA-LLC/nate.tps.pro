@@ -67,6 +67,58 @@ def count_todays_bto() -> int:
     return count
 
 
+def count_todays_bto_cost() -> float:
+    """Sum today's BTO costs (quantity * limit_price * 100) from trades.csv."""
+    today = datetime.date.today().isoformat()
+    if not LOG_FILE.exists():
+        return 0.0
+    total = 0.0
+    with open(LOG_FILE) as f:
+        for row in csv.DictReader(f):
+            if (
+                row.get("timestamp", "").startswith(today)
+                and row.get("action") == "BTO"
+                and row.get("execution_status") in ("SUBMITTED", "FILLED")
+            ):
+                try:
+                    q = int(row.get("quantity", 1))
+                    p = float(row.get("limit_price", 0))
+                    total += p * 100 * q
+                except (ValueError, TypeError):
+                    pass
+    return total
+
+
+def check_daily_budget(limit_price: float, qty: int) -> str | None:
+    """Check if this BTO would exceed today's dollar budget.
+    Returns error message if blocked, None if OK."""
+    budget_pct = float(os.environ.get("DAILY_BUDGET_PCT", "0"))
+    if budget_pct <= 0:
+        return None  # feature disabled
+
+    bal_file = BASE_DIR / "trade-log" / "opening_balance.txt"
+    if not bal_file.exists():
+        return None  # no opening balance captured yet — allow trade
+
+    lines = bal_file.read_text().strip().split("\n")
+    if len(lines) < 2:
+        return None
+    opening_balance = float(lines[0])
+    daily_budget = float(lines[1])
+
+    new_cost = (limit_price or 0) * 100 * qty
+    spent = count_todays_bto_cost()
+    total = spent + new_cost
+
+    if total > daily_budget:
+        return (
+            f"DAILY BUDGET BREACHED: ${total:,.2f} would exceed "
+            f"${daily_budget:,.2f} (50% of opening ${opening_balance:,.2f}). "
+            f"Spent: ${spent:,.2f}, this trade: ${new_cost:,.2f}"
+        )
+    return None
+
+
 def calculate_quantity(limit_price: float) -> int:
     if not limit_price or limit_price <= 0:
         return 1
@@ -189,6 +241,37 @@ def poll_order_status(client, account_hash: str, order_id: str,
     return {"status": "WORKING", "fill_price": None, "fill_qty": 0}
 
 
+def sync_starting_capital():
+    """Fetch real cash balance from Schwab and update STARTING_CAPITAL in .env.trade."""
+    try:
+        import requests
+        with open(TOKEN_FILE) as f:
+            token = json.load(f)
+        account_hash = get_account_hash()
+        headers = {"Authorization": f"Bearer {token['access_token']}"}
+        resp = requests.get(
+            f"https://api.schwabapi.com/trader/v1/accounts/{account_hash}",
+            headers=headers, timeout=10,
+        )
+        if resp.ok:
+            cash = float(resp.json()["securitiesAccount"]["currentBalances"]["cashBalance"])
+            env_file = BASE_DIR / ".env.trade"
+            content = env_file.read_text()
+            import re
+            new_content = re.sub(
+                r"STARTING_CAPITAL=[\d.]+",
+                f"STARTING_CAPITAL={cash:.2f}",
+                content,
+            )
+            if new_content != content:
+                env_file.write_text(new_content)
+                print(f"[executor] STARTING_CAPITAL updated: ${cash:,.2f}")
+        else:
+            print(f"[executor] sync_starting_capital failed: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"[executor] sync_starting_capital error: {e}")
+
+
 def notify_fill(analysis: dict, qty: int, order_id: str, fill_status: str,
                 fill_price=None, fill_qty: int = 0):
     """Send fill/cancel/reject notification to Telegram + Discord."""
@@ -210,6 +293,8 @@ def notify_fill(analysis: dict, qty: int, order_id: str, fill_status: str,
         notify_execution(msg, subject=f"FILLED: {action} {ticker}")
         log_trade(analysis, "FILLED", order_id=order_id, fill_price=fill_price,
                   qty=fill_qty or qty, notes=f"polled_fill")
+        if not PAPER_TRADE:
+            sync_starting_capital()
     elif fill_status == "PARTIAL_FILL":
         msg = (
             f"PARTIAL FILL: {action} {opt_info}"
@@ -220,6 +305,8 @@ def notify_fill(analysis: dict, qty: int, order_id: str, fill_status: str,
         notify_execution(msg, subject=f"PARTIAL FILL: {action} {ticker}")
         log_trade(analysis, "PARTIAL_FILL", order_id=order_id, fill_price=fill_price,
                   qty=fill_qty or qty, notes=f"partial {fill_qty}/{qty}")
+        if not PAPER_TRADE:
+            sync_starting_capital()
     elif fill_status == "REJECTED":
         msg = (
             f"ORDER REJECTED: {action} {opt_info} x{qty} contracts\n"
@@ -506,14 +593,20 @@ def main():
 
     if PAPER_TRADE:
         total_cost = position_cost_usd(limit_price, qty) if limit_price else 0
-        log_trade(analysis, "PAPER_TRADE", qty=qty)
+        # Generate a simulated order ID so paper trades have identifiable numbers
+        paper_id = (
+            f"PAPER-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            f"-{ticker}-{action}"
+        )
+        log_trade(analysis, "PAPER_TRADE", order_id=paper_id, qty=qty)
         notify_execution(
             f"[PAPER] {action} {ticker} "
             f"{int(analysis.get('strike', 0))}"
             f"{'C' if analysis.get('option_type') == 'CALL' else 'P'}"
             f" EXP {analysis.get('expiry_date', '')}"
             + (f" @{limit_price}" if limit_price else " MKT")
-            + f" x{qty} contracts (~${total_cost:.0f})",
+            + f" x{qty} contracts (~${total_cost:.0f})"
+            + f"\nID: {paper_id}",
             subject=f"[PAPER] ORDER PLACED: {action} {ticker}",
         )
         # Simulate fill after brief delay
@@ -524,10 +617,11 @@ def main():
             f"{'C' if analysis.get('option_type') == 'CALL' else 'P'}"
             f" EXP {analysis.get('expiry_date', '')}"
             + (f" @{limit_price}" if limit_price else " MKT")
-            + f" x{qty} contracts (~${total_cost:.0f})",
+            + f" x{qty} contracts (~${total_cost:.0f})"
+            + f"\nID: {paper_id}",
             subject=f"[PAPER] FILLED: {action} {ticker}",
         )
-        print(f"[executor] PAPER TRADE logged: {ticker} {action} x{qty}")
+        print(f"[executor] PAPER TRADE logged: {ticker} {action} x{qty} (ID: {paper_id})")
         return
 
     if action == "BTO":
@@ -540,6 +634,14 @@ def main():
             log_trade(analysis, "BLOCKED_DAILY_LIMIT", qty=qty, notes=msg)
             notify_error(msg)
             print(f"[executor] {msg}")
+            return
+
+        # Daily dollar budget check (50% of opening balance)
+        budget_block = check_daily_budget(limit_price, qty)
+        if budget_block:
+            log_trade(analysis, "BLOCKED_BUDGET", qty=qty, notes=budget_block)
+            notify_error(budget_block)
+            print(f"[executor] {budget_block}")
             return
 
     if not execute_via_api(analysis, qty):

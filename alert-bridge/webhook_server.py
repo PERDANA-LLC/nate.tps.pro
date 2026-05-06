@@ -25,12 +25,27 @@ ALERT_DIR.mkdir(exist_ok=True)
 ALERT_PATTERN = re.compile(
     r"(?P<action>bto|stc)\s+"
     r"(?:\((?P<quantity>\d+)\)\s+)?"  # optional quantity like "(2)"
-    r"(?:(?P<partial>[\d/]+(?:rd'?s?|th)?(?:\s+of)?)\s+)?"
+    r"(?:\((?:"
+    r"(?P<partial_paren>[\d/]+|half|quarter|third)(?:rd'?s?|th)?(?:\s+of)?"
+    r")\)\s+)?"
+    r"(?:(?P<partial>[\d/]+|half|quarter|third)(?:rd'?s?|th)?(?:\s+of)?\s+)?"
     r"(?P<ticker>[A-Z]+)\s+"
     r"(?P<expiry>\d{1,2}/\d{1,2})\s+"
     r"\$?(?P<strike>\d+(?:\.\d+)?)\s+"
     r"(?P<type>calls?|puts?)"
     r"(?:\s+(?:@|near)\s*\$?(?P<price>\d*\.?\d+))?",
+    re.IGNORECASE,
+)
+
+# STC alerts often omit strike and type — price-only format
+# e.g. "stc (half) TWLO 5/15 $4.10"
+STC_PATTERN = re.compile(
+    r"stc\s+"
+    r"(?:\((?P<partial>[\d/]+|half|quarter|third)(?:rd'?s?|th)?(?:\s+of)?\)\s+)?"
+    r"(?:(?P<partial2>[\d/]+|half|quarter|third)(?:rd'?s?|th)?(?:\s+of)?\s+)?"
+    r"(?P<ticker>[A-Z]+)\s+"
+    r"(?P<expiry>\d{1,2}/\d{1,2})\s+"
+    r"\$?(?P<price>\d+\.?\d*)",
     re.IGNORECASE,
 )
 
@@ -73,7 +88,7 @@ def parse_alert(text: str, card_action: str = "") -> Optional[ParsedAlert]:
         action = m.group("action").upper()
         expiry_date, dte = resolve_expiry(m.group("expiry"))
         price_str = m.group("price")
-        partial = (m.group("partial") or "").strip().rstrip("of").strip() or None
+        partial = _clean_partial(m.group("partial") or m.group("partial_paren"))
         opt_type = "CALL" if m.group("type").upper().startswith("CALL") else "PUT"
         limit_price = float(price_str) if price_str else None
         order_type = "LIMIT" if limit_price else "MARKET"
@@ -91,9 +106,35 @@ def parse_alert(text: str, card_action: str = "") -> Optional[ParsedAlert]:
             card_action=card_action or action,
         )
 
-    m2 = CLOSING_ALL_PATTERN.search(text_clean)
+    # Try STC price-only format: "stc (half) TWLO 5/15 $4.10"
+    m2 = STC_PATTERN.search(text_clean)
     if m2 and card_action == "STC":
         ticker = m2.group("ticker").upper()
+        expiry_raw = m2.group("expiry")
+        expiry_date, dte = resolve_expiry(expiry_raw)
+        limit_price = float(m2.group("price")) if m2.group("price") else None
+        partial = _clean_partial(m2.group("partial") or m2.group("partial2"))
+
+        # Look up strike and option_type from open positions in trade journal
+        strike, option_type = _lookup_position(ticker, expiry_date)
+        order_type = "LIMIT" if limit_price else "MARKET"
+        return ParsedAlert(
+            action="STC",
+            ticker=ticker,
+            strike=strike,
+            option_type=option_type or "CALL",
+            expiry_raw=expiry_raw,
+            expiry_date=expiry_date,
+            days_to_expiry=dte,
+            order_type=order_type,
+            limit_price=limit_price,
+            partial_close=partial,
+            card_action="STC",
+        )
+
+    m3 = CLOSING_ALL_PATTERN.search(text_clean)
+    if m3 and card_action == "STC":
+        ticker = m3.group("ticker").upper()
         today = datetime.date.today()
         return ParsedAlert(
             action="STC",
@@ -110,6 +151,46 @@ def parse_alert(text: str, card_action: str = "") -> Optional[ParsedAlert]:
         )
 
     return None
+
+
+def _clean_partial(val: str | None) -> str | None:
+    """Clean a partial-close string. Handles 'half', '1/2', '3rd of', etc."""
+    if not val:
+        return None
+    v = val.strip()
+    # Remove trailing " of" but NOT via rstrip("of") which eats letters
+    if v.endswith(" of"):
+        v = v[:-3]
+    # Normalize
+    v = v.strip().lower()
+    if v == "half":
+        v = "1/2"
+    elif v == "quarter":
+        v = "1/4"
+    elif v == "third":
+        v = "1/3"
+    return v or None
+
+
+def _lookup_position(ticker: str, expiry_date: str):
+    """Find strike and option_type for an open position from trades.csv.
+    Returns (strike, option_type) or (0.0, None) if not found."""
+    import csv as _csv
+    journal = BASE_DIR / "trade-log" / "trades.csv"
+    if not journal.exists():
+        return 0.0, None
+    try:
+        with open(journal) as f:
+            for row in _csv.DictReader(f):
+                if (
+                    row.get("ticker", "").upper() == ticker
+                    and row.get("expiry", "") == expiry_date
+                    and row.get("action") == "BTO"
+                ):
+                    return float(row.get("strike", 0)), row.get("option_type", "CALL")
+    except Exception:
+        pass
+    return 0.0, None
 
 
 def _process_correction(parsed, raw: str):

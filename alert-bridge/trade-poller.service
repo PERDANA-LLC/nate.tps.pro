@@ -10,6 +10,8 @@ WorkingDirectory=/root/nate.tps.pro/alert-bridge
 ExecStart=/root/nate.tps.pro/.venv/bin/python /root/nate.tps.pro/alert-bridge/alert_poller.py
 Restart=always
 RestartSec=10
+WatchdogSec=180
+TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1

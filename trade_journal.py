@@ -23,7 +23,7 @@ from typing import Optional
 
 BASE = Path(__file__).resolve().parent
 CSV_PATH = BASE / "trade-log" / "trades.csv"
-STARTING_CAPITAL = 10000.0
+STARTING_CAPITAL = 5014.60  # JOINT_TONA cash balance from Schwab
 OPTION_MULTIPLIER = 100
 
 
